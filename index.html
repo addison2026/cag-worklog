@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CAG마케팅유닛 워크로그</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyCBUprzRAVme2c4DlDH2JRV6blPmQ7awnM",
+      authDomain: "cag-mkt-worklog.firebaseapp.com",
+      projectId: "cag-mkt-worklog",
+      storageBucket: "cag-mkt-worklog.firebasestorage.app",
+      messagingSenderId: "318995097468",
+      appId: "1:318995097468:web:0934b2591bfe66be9fa6f9",
+      measurementId: "G-QJPL9PQ0TS"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    const CATEGORY_ICONS = { 'vd글로벌': '🌍', 'vd중국': '🇨🇳', '마영전': '📊', '기타': '📌' };
+    const userColors = {
+      user1: '#3b82f6', user2: '#ef4444', user3: '#10b981', user4: '#a855f7',
+      user5: '#f97316', user6: '#ec4899', user7: '#06b6d4', user8: '#f59e0b',
+    };
+    const teamMembers = [
+      { id: 'user1', name: '한지혜' }, { id: 'user2', name: '김지선' },
+      { id: 'user3', name: '이소연' }, { id: 'user4', name: '박수민' },
+      { id: 'user5', name: '유은지' }, { id: 'user6', name: '김민정' },
+      { id: 'user7', name: '권세봉' }, { id: 'user8', name: '전룡' },
+    ];
+    const categories = ['vd글로벌', 'vd중국', '마영전', '기타'];
+
+    let state = {
+      currentUser: null, userColor: null, view: 'feed',
+      selectedDate: new Date().toISOString().split('T')[0],
+      currentMonth: new Date(),
+      worklogs: [],
+      quickTasks: [''], quickCategory: 'vd글로벌', quickNote: '',
+      editingId: null, showDatePicker: false, expandedMember: null,
+    };
+
+    // Firestore 실시간 수신
+    const q = query(collection(db, 'worklogs'), orderBy('createdAt', 'desc'));
+    onSnapshot(q, (snapshot) => {
+      state.worklogs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (state.currentUser) render();
+    });
+
+    function getCurrentTime() {
+      const now = new Date();
+      return now.toISOString().split('T')[0] + ' ' + String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+    }
+
+    async function saveWorklog() {
+      const validTasks = state.quickTasks.filter(t => t.trim());
+      if (!validTasks.length) return;
+      const userName = teamMembers.find(m => m.id === state.currentUser)?.name || '';
+      const data = {
+        userId: state.currentUser, userName,
+        date: state.selectedDate, time: getCurrentTime(),
+        category: state.quickCategory, tasks: validTasks,
+        completed: false, note: state.quickNote,
+        createdAt: new Date().toISOString(),
+      };
+      if (state.editingId) {
+        await updateDoc(doc(db, 'worklogs', state.editingId), data);
+        state.editingId = null;
+      } else {
+        await addDoc(collection(db, 'worklogs'), data);
+      }
+      state.quickTasks = ['']; state.quickCategory = 'vd글로벌'; state.quickNote = '';
+      render();
+    }
+
+    async function deleteWorklog(id) {
+      await deleteDoc(doc(db, 'worklogs', id));
+    }
+
+    async function toggleComplete(id) {
+      const log = state.worklogs.find(w => w.id === id);
+      if (log) await updateDoc(doc(db, 'worklogs', id), { completed: !log.completed });
+    }
+
+    function editWorklog(id) {
+      const log = state.worklogs.find(w => w.id === id);
+      if (!log) return;
+      state.editingId = id; state.quickTasks = [...log.tasks];
+      state.quickCategory = log.category; state.quickNote = log.note || '';
+      render();
+    }
+
+    function copyToClipboard(text) {
+      navigator.clipboard.writeText(text);
+      alert('복사되었습니다!');
+    }
+
+    function getDaysInMonth(d) { return new Date(d.getFullYear(), d.getMonth()+1, 0).getDate(); }
+    function getFirstDayOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1).getDay(); }
+
+    function getWeeklyReport() {
+      const today = new Date();
+      const weekStart = new Date(today); weekStart.setDate(today.getDate() - today.getDay() + 1);
+      const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6);
+      const weekLogs = state.worklogs.filter(w => { const d = new Date(w.date); return d >= weekStart && d <= weekEnd; });
+      const keywordMap = {}, categoryCount = {};
+      weekLogs.forEach(log => {
+        categoryCount[log.category] = (categoryCount[log.category] || 0) + 1;
+        log.tasks.forEach(task => {
+          task.split(/[\s,()]/).filter(w => w.length > 2).forEach(word => { keywordMap[word] = (keywordMap[word]||0)+1; });
+        });
+      });
+      const sortedKeywords = Object.entries(keywordMap).sort((a,b)=>b[1]-a[1]).slice(0,10);
+      const categoryByTask = {};
+      categories.forEach(cat => { categoryByTask[cat] = weekLogs.filter(w=>w.category===cat).flatMap(w=>w.tasks); });
+      const startOfYear = new Date(weekStart.getFullYear(), 0, 1);
+      const weekNumber = Math.ceil((Math.abs(weekStart - startOfYear)/86400000)/7);
+      return { weekStart, weekEnd, weekLogs, sortedKeywords, categoryCount, categoryByTask, weekNumber };
+    }
+
+    function categoryBadge(category) {
+      return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-semibold">${CATEGORY_ICONS[category]||'📌'} ${category}</span>`;
+    }
+
+    function renderLogin() {
+      return `
+        <div class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+          <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
+            <div class="text-center mb-8">
+              <div class="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              </div>
+              <h1 class="text-3xl font-bold text-slate-900">CAG마케팅유닛 워크로그</h1>
+              <p class="text-slate-600 mt-2">팀원을 선택해 로그인하세요</p>
+            </div>
+            <div class="space-y-2">
+              ${teamMembers.map(m => `
+                <button onclick="login('${m.id}')" class="w-full p-4 text-left border-2 border-slate-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition font-medium text-slate-900 flex items-center gap-3">
+                  <span class="inline-block w-3 h-3 rounded-full" style="background:${userColors[m.id]}"></span>
+                  ${m.name}
+                </button>`).join('')}
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function renderFeed() {
+      const todayLogs = state.worklogs.filter(w => w.date === state.selectedDate && w.userId === state.currentUser);
+      const allTodayLogs = state.worklogs.filter(w => w.date === state.selectedDate);
+      const dateLabel = new Date(state.selectedDate + 'T12:00:00').toLocaleDateString('ko-KR', { month:'long', day:'numeric', weekday:'long' });
+
+      return `
+        <div class="grid gap-6" style="grid-template-columns:2fr 1fr">
+          <div class="space-y-6">
+            <!-- 입력 폼 -->
+            <div class="bg-white rounded-lg shadow-lg p-6">
+              <h2 class="text-xl font-bold text-slate-900 mb-1">${state.editingId ? '업무 수정' : '업무를 기록하세요'}</h2>
+              <p class="text-xs text-slate-500 mb-4">${dateLabel}</p>
+              <div class="grid grid-cols-2 gap-3 mb-4">
+                <div>
+                  <label class="block text-xs font-semibold text-slate-900 mb-1">카테고리</label>
+                  <select id="quickCategory" onchange="updateCategory(this.value)" class="w-full px-2 py-1.5 border border-slate-300 rounded text-xs focus:outline-none focus:ring-2">
+                    ${categories.map(cat => `<option value="${cat}" ${state.quickCategory===cat?'selected':''}>${CATEGORY_ICONS[cat]} ${cat}</option>`).join('')}
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-xs font-semibold text-slate-900 mb-1">날짜</label>
+                  <input type="date" value="${state.selectedDate}" onchange="updateDate(this.value)" class="w-full px-2 py-1.5 border border-slate-300 rounded text-xs focus:outline-none focus:ring-2" />
+                </div>
+              </div>
+              <div class="space-y-2 mb-4" id="taskList">
+                ${state.quickTasks.map((task, idx) => `
+                  <div class="flex gap-2">
+                    <span class="text-xs text-slate-400 font-bold mt-2">${idx+1}.</span>
+                    <input type="text" value="${task}" oninput="updateTask(${idx}, this.value)" placeholder="진행 업무나 추후 진행 확정 업무를 기록해 주세요"
+                      class="flex-1 px-2 py-1.5 border border-slate-300 rounded text-xs focus:outline-none focus:ring-2" />
+                    ${state.quickTasks.length > 1 ? `<button onclick="removeTask(${idx})" class="p-1 text-slate-400 hover:text-red-600 mt-1">✕</button>` : ''}
+                  </div>`).join('')}
+              </div>
+              <div class="mb-4">
+                <label class="block text-xs font-semibold text-slate-900 mb-1">메모 (예정 완료일, 기타 내용)</label>
+                <div class="flex gap-2">
+                  <input type="text" id="quickNote" value="${state.quickNote}" oninput="updateNote(this.value)" placeholder="예: 예정 완료일: 2024-04-05"
+                    class="flex-1 px-2 py-1.5 border border-slate-300 rounded text-xs focus:outline-none focus:ring-2" />
+                  <button onclick="toggleDatePicker()" class="px-3 py-1.5 bg-slate-200 text-slate-700 rounded text-xs font-medium hover:bg-slate-300 transition">📅</button>
+                </div>
+                ${state.showDatePicker ? `
+                  <div class="mt-2 p-3 bg-slate-50 border border-slate-300 rounded">
+                    <div class="flex justify-between items-center mb-2">
+                      <h4 class="text-xs font-semibold text-slate-900">목표 날짜 선택</h4>
+                      <button onclick="toggleDatePicker()" class="text-slate-400 hover:text-red-600">✕</button>
+                    </div>
+                    <input type="date" onchange="setDeadline(this.value)" class="w-full px-2 py-1.5 border border-slate-300 rounded text-xs" />
+                  </div>` : ''}
+              </div>
+              <button onclick="addTask()" class="mb-3 font-medium flex items-center gap-1 text-xs" style="color:${state.userColor}">+ 업무 추가</button>
+              <div class="flex gap-2">
+                <button onclick="saveWorklog()" class="flex-1 py-2 text-white rounded hover:opacity-90 transition font-semibold text-sm" style="background:${state.userColor}">
+                  ${state.editingId ? '수정 완료' : '저장하기'}
+                </button>
+                ${state.editingId ? `<button onclick="cancelEdit()" class="px-4 py-2 border-2 border-slate-300 text-slate-600 rounded hover:bg-slate-50 transition font-semibold text-sm">취소</button>` : ''}
+              </div>
+            </div>
+
+            <!-- 내 업무 -->
+            <div class="bg-white rounded-lg shadow p-4">
+              <h3 class="text-sm font-bold text-slate-900 mb-3">오늘 작성한 업무 (${todayLogs.length}건)</h3>
+              ${todayLogs.length === 0 ? '<p class="text-slate-500 text-xs">아직 작성한 업무가 없습니다.</p>' : todayLogs.map(log => `
+                <div class="border border-slate-200 rounded p-3 bg-slate-50 mb-3">
+                  <div class="flex justify-between items-start mb-2">
+                    <div class="flex items-center gap-2">
+                      ${categoryBadge(log.category)}
+                      <span class="text-xs text-slate-500">${log.time}</span>
+                    </div>
+                    <div class="flex gap-1">
+                      <button onclick="toggleComplete('${log.id}')" class="p-1 transition ${log.completed ? 'text-green-600' : 'text-slate-400 hover:text-green-600'}">✓</button>
+                      ${log.userId === state.currentUser ? `
+                        <button onclick="editWorklog('${log.id}')" class="p-1 text-slate-400 hover:text-blue-600">✎</button>
+                        <button onclick="deleteWorklog('${log.id}')" class="p-1 text-slate-400 hover:text-red-600">✕</button>` : ''}
+                    </div>
+                  </div>
+                  <ul class="space-y-1 mb-2">
+                    ${log.tasks.map(task => `<li class="flex gap-2 text-xs ${log.completed ? 'line-through text-slate-400' : 'text-slate-700'}"><span class="text-slate-400">•</span><span>${task}</span></li>`).join('')}
+                  </ul>
+                  ${log.note ? `<p class="text-xs text-slate-500 italic">📌 ${log.note}</p>` : ''}
+                </div>`).join('')}
+            </div>
+
+            <!-- 팀 전체 -->
+            <div class="bg-white rounded-lg shadow p-4">
+              <h3 class="text-sm font-bold text-slate-900 mb-3">팀 전체 업무 (${allTodayLogs.length}건)</h3>
+              ${allTodayLogs.length === 0 ? '<p class="text-slate-500 text-xs">이 날짜에 업무가 없습니다.</p>' : allTodayLogs.map(log => `
+                <div class="border border-slate-200 rounded p-3 bg-white mb-2">
+                  <div class="flex justify-between items-start mb-2">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${userColors[log.userId]}"></span>
+                      <span class="font-semibold text-slate-900 text-xs">${log.userName}</span>
+                      ${categoryBadge(log.category)}
+                      <span class="text-xs text-slate-500">${log.time}</span>
+                    </div>
+                    <button onclick="copyToClipboard('[${log.userName}] ${log.date}\\n${log.tasks.join('\\n')}')" class="p-1 text-slate-400 hover:text-blue-600">⎘</button>
+                  </div>
+                  <ul class="space-y-0.5 ml-3">
+                    ${log.tasks.map(task => `<li class="text-slate-700 text-xs">• ${task}</li>`).join('')}
+                  </ul>
+                </div>`).join('')}
+            </div>
+          </div>
+
+          <!-- 범례 -->
+          <div>
+            <div class="bg-white rounded-lg shadow p-4">
+              <h3 class="text-sm font-bold text-slate-900 mb-3">범례</h3>
+              <h4 class="text-xs font-semibold text-slate-900 mb-2">카테고리</h4>
+              <div class="space-y-1.5 mb-4">
+                ${categories.map(cat => `<div class="flex items-center gap-2"><span>${CATEGORY_ICONS[cat]}</span><span class="text-slate-700 text-xs">${cat}</span></div>`).join('')}
+              </div>
+              <hr class="my-3 border-slate-200" />
+              <h4 class="text-xs font-semibold text-slate-900 mb-2">담당자</h4>
+              <div class="space-y-1.5">
+                ${teamMembers.map(m => `<div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${userColors[m.id]}"></span><span class="text-slate-700 text-xs">${m.name}</span></div>`).join('')}
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function renderCalendar() {
+      const daysInMonth = getDaysInMonth(state.currentMonth);
+      const firstDay = getFirstDayOfMonth(state.currentMonth);
+      const yr = state.currentMonth.getFullYear();
+      const mo = state.currentMonth.getMonth();
+      const months = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+
+      let cells = '';
+      for (let i = 0; i < firstDay; i++) cells += `<div class="p-1 h-20"></div>`;
+      for (let day = 1; day <= daysInMonth; day++) {
+        const ds = `${yr}-${String(mo+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+        const isSel = ds === state.selectedDate;
+        const dayLogs = state.worklogs.filter(w => w.date === ds);
+        const userIdSet = [...new Set(dayLogs.map(w => w.userId))];
+        cells += `
+          <div onclick="selectDate('${ds}')" class="p-1 h-20 border rounded cursor-pointer transition text-xs ${isSel ? 'text-white' : dayLogs.length ? 'bg-slate-100 border-slate-300' : 'bg-white border-slate-200 hover:bg-slate-50'}"
+            style="${isSel ? `background:${state.userColor};border-color:${state.userColor}` : ''}">
+            <div class="font-semibold">${day}</div>
+            ${dayLogs.length ? `
+              <div class="flex gap-0.5 mt-1 flex-wrap">
+                ${userIdSet.map(uid => `<span class="inline-block w-2 h-2 rounded-full" style="background:${userColors[uid]||'#6b7280'}"></span>`).join('')}
+              </div>
+              <div class="text-xs mt-0.5 ${isSel ? 'text-white' : 'text-slate-600'}">${dayLogs.length}건</div>` : ''}
+          </div>`;
+      }
+
+      const selLogs = state.worklogs.filter(w => w.date === state.selectedDate);
+      return `
+        <div class="grid gap-6" style="grid-template-columns:2fr 1fr">
+          <div class="bg-white rounded-lg shadow p-6">
+            <div class="flex items-center justify-between mb-6">
+              <div class="flex gap-3">
+                <select onchange="setCalYear(this.value)" class="px-3 py-1.5 border border-slate-300 rounded text-sm">
+                  ${[2024,2025,2026].map(y=>`<option ${yr===y?'selected':''} value="${y}">${y}년</option>`).join('')}
+                </select>
+                <select onchange="setCalMonth(this.value)" class="px-3 py-1.5 border border-slate-300 rounded text-sm">
+                  ${months.map((m,i)=>`<option ${mo===i?'selected':''} value="${i}">${m}</option>`).join('')}
+                </select>
+              </div>
+              <div class="flex gap-2">
+                <button onclick="prevMonth()" class="p-1.5 hover:bg-slate-100 rounded">‹</button>
+                <button onclick="nextMonth()" class="p-1.5 hover:bg-slate-100 rounded">›</button>
+              </div>
+            </div>
+            <div class="grid grid-cols-7 gap-2 mb-2">
+              ${['일','월','화','수','목','금','토'].map(d=>`<div class="text-center font-semibold text-slate-600 py-2 text-xs">${d}</div>`).join('')}
+            </div>
+            <div class="grid grid-cols-7 gap-1">${cells}</div>
+          </div>
+          <div class="bg-white rounded-lg shadow p-4 h-fit">
+            <h3 class="text-sm font-bold text-slate-900 mb-3">
+              ${new Date(state.selectedDate+'T12:00:00').toLocaleDateString('ko-KR',{month:'long',day:'numeric',weekday:'short'})}
+            </h3>
+            <div class="space-y-2 max-h-96 overflow-y-auto">
+              ${selLogs.length === 0 ? '<p class="text-slate-500 text-xs">이 날짜에 업무가 없습니다.</p>' : selLogs.map(log=>`
+                <div class="border border-slate-200 rounded p-2 bg-slate-50">
+                  <div class="flex justify-between items-start mb-1">
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                      <span class="inline-block w-2 h-2 rounded-full" style="background:${userColors[log.userId]}"></span>
+                      <span class="font-semibold text-slate-900 text-xs">${log.userName}</span>
+                      ${categoryBadge(log.category)}
+                    </div>
+                    <button onclick="deleteWorklog('${log.id}')" class="text-slate-400 hover:text-red-600">✕</button>
+                  </div>
+                  <ul class="space-y-0.5">
+                    ${log.tasks.map(task=>`<li class="text-xs text-slate-700 flex gap-1"><span class="text-slate-400">•</span><span>${task}</span></li>`).join('')}
+                  </ul>
+                </div>`).join('')}
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function renderReport() {
+      const wr = getWeeklyReport();
+      return `
+        <div class="space-y-6">
+          <div class="bg-white rounded-lg shadow p-6">
+            <h2 class="text-xl font-bold text-slate-900 mb-2">주간 업무보고서</h2>
+            <div class="text-xs text-slate-600">${wr.weekStart.toLocaleDateString('ko-KR')} ~ ${wr.weekEnd.toLocaleDateString('ko-KR')} · ${wr.weekStart.getMonth()+1}월 ${Math.ceil(wr.weekStart.getDate()/7)}주차 · W${String(wr.weekNumber).padStart(2,'0')}</div>
+          </div>
+          <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-bold text-slate-900 mb-4">1. 이번주 주요 진행 업무</h3>
+            <div class="grid grid-cols-2 gap-4">
+              ${categories.map((cat,ci)=>`
+                <div class="border-l-4 border-blue-500 pl-3">
+                  <h4 class="font-semibold text-slate-900 text-sm mb-2">1.${ci+1} ${cat}</h4>
+                  ${wr.categoryByTask[cat]?.length ? `
+                    <ul class="space-y-1">
+                      ${wr.categoryByTask[cat].slice(0,5).map(task=>`<li class="text-slate-700 text-xs flex gap-1"><span class="text-slate-400">•</span><span>${task}</span></li>`).join('')}
+                      ${wr.categoryByTask[cat].length>5?`<li class="text-slate-500 text-xs">+ ${wr.categoryByTask[cat].length-5}개</li>`:''}
+                    </ul>
+                    <button onclick="copyToClipboard('${wr.categoryByTask[cat].join('\\n')}')" class="text-xs font-medium flex items-center gap-1 mt-2" style="color:${state.userColor}">⎘ 복사</button>
+                  ` : '<p class="text-slate-500 text-xs">기록된 업무가 없습니다.</p>'}
+                </div>`).join('')}
+            </div>
+          </div>
+          <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-bold text-slate-900 mb-3">주요 키워드 (빈도순)</h3>
+            ${wr.sortedKeywords.length===0 ? '<p class="text-slate-500 text-xs">이 주간에 기록된 데이터가 없습니다.</p>' : wr.sortedKeywords.map(([kw,cnt],idx)=>`
+              <div class="flex items-center gap-2 mb-2">
+                <div class="w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold text-white" style="background:${state.userColor}">${idx+1}</div>
+                <span class="flex-1 text-slate-900 text-sm font-medium">${kw}</span>
+                <span class="text-xs text-slate-500">${cnt}회</span>
+                <div class="w-20 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                  <div class="h-full rounded-full" style="background:${state.userColor};width:${(cnt/Math.max(...wr.sortedKeywords.map(([,c])=>c)))*100}%"></div>
+                </div>
+              </div>`).join('')}
+          </div>
+          <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-bold text-slate-900 mb-4">팀원별 주간 업무</h3>
+            ${teamMembers.map(member=>{
+              const mLogs = wr.weekLogs.filter(w=>w.userId===member.id);
+              return `
+                <div class="border border-slate-200 rounded p-3 mb-4">
+                  <div class="flex items-center gap-2 mb-2">
+                    <span class="inline-block w-3 h-3 rounded-full" style="background:${userColors[member.id]}"></span>
+                    <span class="font-semibold text-slate-900 text-sm">${member.name}</span>
+                    <span class="text-xs text-slate-500">(${mLogs.length}건)</span>
+                  </div>
+                  ${mLogs.length===0 ? '<p class="text-slate-500 text-xs">이 주간에 기록된 업무가 없습니다.</p>' : `
+                    <ul class="space-y-1 ml-4">
+                      ${mLogs.flatMap(log=>log.tasks).map(task=>`<li class="text-slate-700 text-xs flex gap-1"><span class="text-slate-400">•</span><span>${task}</span></li>`).join('')}
+                    </ul>`}
+                </div>`;
+            }).join('')}
+          </div>
+        </div>`;
+    }
+
+    function renderFuture() {
+      const withDeadline = state.worklogs.filter(w=>w.note&&w.note.includes('예정 완료일'))
+        .sort((a,b)=>(a.note.match(/\d{4}-\d{2}-\d{2}/)?.[0]||'').localeCompare(b.note.match(/\d{4}-\d{2}-\d{2}/)?.[0]||''));
+      const withoutDeadline = state.worklogs.filter(w=>!w.note||!w.note.includes('예정 완료일'));
+      return `
+        <div class="space-y-6">
+          <div class="bg-white rounded-lg shadow p-6"><h2 class="text-2xl font-bold text-slate-900">🎯 향후 일정</h2></div>
+          <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-bold text-slate-900 mb-4">⏰ 예정 완료일이 있는 업무</h3>
+            ${withDeadline.length===0 ? '<p class="text-slate-500 text-xs">예정 완료일이 있는 업무가 없습니다.</p>' : withDeadline.map(log=>{
+              const dm = log.note.match(/\d{4}-\d{2}-\d{2}/);
+              const deadline = dm?dm[0]:'';
+              const daysLeft = deadline ? Math.ceil((new Date(deadline)-new Date())/86400000) : 0;
+              const isUrgent = daysLeft<=3&&daysLeft>=0;
+              return `
+                <div class="border rounded-lg p-4 mb-3 ${isUrgent?'border-red-500 bg-red-50':'border-slate-200'}">
+                  <div class="flex items-center gap-2 mb-2 flex-wrap">
+                    <span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${userColors[log.userId]}"></span>
+                    ${categoryBadge(log.category)}
+                    <span class="font-semibold text-slate-900 text-sm">${log.userName}</span>
+                    <span class="text-xs font-bold px-2 py-0.5 rounded ${isUrgent?'bg-red-200 text-red-700':'bg-blue-100 text-blue-700'}">
+                      📅 ${deadline} ${daysLeft<=0?'(완료)':daysLeft===0?'(오늘)':`(${daysLeft}일 남음)`}
+                    </span>
+                  </div>
+                  <ul class="space-y-1 ml-4">
+                    ${log.tasks.map(task=>`<li class="text-slate-700 text-xs">• ${task}</li>`).join('')}
+                  </ul>
+                </div>`;}).join('')}
+          </div>
+          <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-bold text-slate-900 mb-4">📋 예정 완료일이 없는 업무</h3>
+            ${withoutDeadline.length===0 ? '<p class="text-slate-500 text-xs">추가 진행이 필요한 업무가 없습니다.</p>' : withoutDeadline.map(log=>`
+              <div class="border border-slate-200 rounded-lg p-4 mb-3">
+                <div class="flex items-center gap-2 mb-2 flex-wrap">
+                  <span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${userColors[log.userId]}"></span>
+                  ${categoryBadge(log.category)}
+                  <span class="font-semibold text-slate-900 text-sm">${log.userName}</span>
+                  <span class="text-xs text-slate-600">${log.date}</span>
+                </div>
+                <ul class="space-y-1 ml-4">
+                  ${log.tasks.map(task=>`<li class="text-slate-700 text-xs">• ${task}</li>`).join('')}
+                </ul>
+              </div>`).join('')}
+          </div>
+        </div>`;
+    }
+
+    function render() {
+      const root = document.getElementById('root');
+      if (!state.currentUser) { root.innerHTML = renderLogin(); return; }
+
+      const tabs = [
+        { id:'feed', label:'📝 오늘의 업무' }, { id:'calendar', label:'📅 캘린더' },
+        { id:'report', label:'📊 주간 보고서' }, { id:'future', label:'🎯 향후 일정' },
+      ];
+      const userName = teamMembers.find(m=>m.id===state.currentUser)?.name||'';
+
+      let content = '';
+      if (state.view==='feed') content = renderFeed();
+      else if (state.view==='calendar') content = renderCalendar();
+      else if (state.view==='report') content = renderReport();
+      else if (state.view==='future') content = renderFuture();
+
+      root.innerHTML = `
+        <div class="min-h-screen bg-slate-50">
+          <div class="border-b border-slate-200 sticky top-0 z-40" style="background:${state.userColor}">
+            <div class="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
+              <h1 class="text-2xl font-bold text-white">CAG마케팅유닛 워크로그</h1>
+              <div class="flex items-center gap-4">
+                <div class="text-right">
+                  <div class="text-sm text-white opacity-80">로그인됨</div>
+                  <div class="font-semibold text-white">${userName}</div>
+                </div>
+                <button onclick="logout()" class="p-2 hover:bg-white hover:bg-opacity-20 rounded-lg text-white transition">⏻</button>
+              </div>
+            </div>
+          </div>
+          <div class="max-w-7xl mx-auto px-6 py-8">
+            <div class="flex gap-2 mb-8 border-b border-slate-200 overflow-x-auto">
+              ${tabs.map(tab=>`
+                <button onclick="setView('${tab.id}')" class="px-4 py-3 font-medium transition whitespace-nowrap ${state.view===tab.id?'border-b-2':' text-slate-600 hover:text-slate-900'}"
+                  style="${state.view===tab.id?`color:${state.userColor};border-color:${state.userColor}`:''}">
+                  ${tab.label}
+                </button>`).join('')}
+            </div>
+            ${content}
+          </div>
+        </div>`;
+    }
+
+    // 전역 함수
+    window.login = (uid) => { state.currentUser=uid; state.userColor=userColors[uid]; render(); };
+    window.logout = () => { state.currentUser=null; state.userColor=null; render(); };
+    window.setView = (v) => { state.view=v; render(); };
+    window.selectDate = (d) => { state.selectedDate=d; render(); };
+    window.updateCategory = (v) => { state.quickCategory=v; };
+    window.updateDate = (v) => { state.selectedDate=v; };
+    window.updateTask = (i,v) => { state.quickTasks[i]=v; };
+    window.updateNote = (v) => { state.quickNote=v; };
+    window.addTask = () => { state.quickTasks.push(''); render(); };
+    window.removeTask = (i) => { state.quickTasks.splice(i,1); render(); };
+    window.toggleDatePicker = () => { state.showDatePicker=!state.showDatePicker; render(); };
+    window.setDeadline = (v) => { state.quickNote=`예정 완료일: ${v}`; state.showDatePicker=false; render(); };
+    window.saveWorklog = saveWorklog;
+    window.deleteWorklog = deleteWorklog;
+    window.toggleComplete = toggleComplete;
+    window.editWorklog = editWorklog;
+    window.copyToClipboard = copyToClipboard;
+    window.cancelEdit = () => { state.editingId=null; state.quickTasks=['']; state.quickCategory='vd글로벌'; state.quickNote=''; render(); };
+    window.prevMonth = () => { state.currentMonth=new Date(state.currentMonth.getFullYear(), state.currentMonth.getMonth()-1); render(); };
+    window.nextMonth = () => { state.currentMonth=new Date(state.currentMonth.getFullYear(), state.currentMonth.getMonth()+1); render(); };
+    window.setCalYear = (y) => { state.currentMonth=new Date(parseInt(y), state.currentMonth.getMonth()); render(); };
+    window.setCalMonth = (m) => { state.currentMonth=new Date(state.currentMonth.getFullYear(), parseInt(m)); render(); };
+
+    render();
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+</body>
+</html>
