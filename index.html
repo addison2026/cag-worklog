@@ -1,703 +1,595 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CAG마케팅유닛 워크로그</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-
-    const firebaseConfig = {
-      apiKey: "AIzaSyCBUprzRAVme2c4DlDH2JRV6blPmQ7awnM",
-      authDomain: "cag-mkt-worklog.firebaseapp.com",
-      projectId: "cag-mkt-worklog",
-      storageBucket: "cag-mkt-worklog.firebasestorage.app",
-      messagingSenderId: "318995097468",
-      appId: "1:318995097468:web:0934b2591bfe66be9fa6f9",
-    };
-
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
-
-    const CAT1 = ['VD글로벌','VD중국','마영전','기타'];
-    const CAT_ICONS = { 'VD글로벌':'🌍','VD중국':'🇨🇳','마영전':'📊','기타':'📌' };
-    const userColors = {
-      user1:'#3b82f6',user2:'#ef4444',user3:'#10b981',user4:'#a855f7',
-      user5:'#f97316',user6:'#ec4899',user7:'#06b6d4',user8:'#f59e0b',
-    };
-    const teamMembers = [
-      {id:'user1',name:'한지혜'},{id:'user2',name:'김지선'},
-      {id:'user3',name:'이소연'},{id:'user4',name:'박수민'},
-      {id:'user5',name:'유은지'},{id:'user6',name:'김민정'},
-      {id:'user7',name:'권세봉'},{id:'user8',name:'전룡'},
-    ];
-
-    let state = {
-      currentUser:null, userColor:null, view:'my',
-      selectedDate: new Date().toISOString().split('T')[0],
-      currentMonth: new Date(),
-      myCalMonth: new Date(),
-      worklogs:[],
-      // 입력 폼: 카테고리별 rows
-      formRows: { 'VD글로벌':[''], 'VD중국':[''], '마영전':[''], '기타':[''] },
-      formDeadlines: { 'VD글로벌':'', 'VD중국':'', '마영전':'', '기타':'' },
-      formMemos: { 'VD글로벌':'', 'VD중국':'', '마영전':'', '기타':'' },
-      formCat2: { 'VD글로벌':'', 'VD중국':'', '마영전':'', '기타':'' },
-      editingId: null,
-      cat2List: [],
-      notices: [],
-      newNotice: '',
-      // 설정탭
-      newCat2Input: '',
-      editCat2Id: null,
-      editCat2Val: '',
-      // 삭제 확인 팝업
-      deleteConfirmId: null,
-      // 주간보고서 날짜 범위 (기본: 이번주)
-      reportWeekOffset: 0,
-    };
-
-    // Firestore 실시간
-    const q = query(collection(db,'worklogs'), orderBy('createdAt','desc'));
-    onSnapshot(q, snap => { state.worklogs = snap.docs.map(d=>({id:d.id,...d.data()})); render(); });
-
-    // 2차 카테고리 실시간
-    onSnapshot(doc(db,'settings','cat2'), snap => {
-      if(snap.exists()) state.cat2List = snap.data().list || [];
-      else state.cat2List = [];
-      render();
-    });
-
-    // 공지사항 실시간
-    onSnapshot(doc(db,'settings','notices'), snap => {
-      if(snap.exists()) state.notices = snap.data().list || [];
-      else state.notices = [];
-      render();
-    });
-
-    function getCurrentTime() {
-      const now = new Date();
-      return now.toISOString().split('T')[0]+' '+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
-    }
-
-    function getWeekRange(offset=0) {
-      const today = new Date();
-      const mon = new Date(today); mon.setDate(today.getDate()-today.getDay()+1+(offset*7));
-      const sun = new Date(mon); sun.setDate(mon.getDate()+6);
-      return {start:mon, end:sun};
-    }
-
-    async function saveWorklog(cat1) {
-      const tasks = (state.formRows[cat1]||['']).filter(t=>t.trim());
-      if(!tasks.length) return;
-      const userName = teamMembers.find(m=>m.id===state.currentUser)?.name||'';
-      const data = {
-        userId:state.currentUser, userName,
-        date: new Date().toISOString().split('T')[0],
-        time: getCurrentTime(),
-        cat1, cat2: state.formCat2[cat1]||'',
-        tasks, completed:false,
-        deadline: state.formDeadlines[cat1]||'',
-        note: state.formMemos[cat1]||'',
-        createdAt: new Date().toISOString(),
-      };
-      if(state.editingId) {
-        await updateDoc(doc(db,'worklogs',state.editingId), data);
-        state.editingId = null;
-      } else {
-        await addDoc(collection(db,'worklogs'), data);
-      }
-      state.formRows[cat1]=[''];
-      state.formDeadlines[cat1]='';
-      state.formMemos[cat1]='';
-      state.formCat2[cat1]='';
-      render();
-    }
-
-    function confirmDelete(id) { state.deleteConfirmId=id; render(); }
-    async function doDelete() {
-      if(state.deleteConfirmId) { await deleteDoc(doc(db,'worklogs',state.deleteConfirmId)); state.deleteConfirmId=null; render(); }
-    }
-    function cancelDelete() { state.deleteConfirmId=null; render(); }
-
-    async function toggleComplete(id) {
-      const log = state.worklogs.find(w=>w.id===id);
-      if(log) await updateDoc(doc(db,'worklogs',id),{completed:!log.completed});
-    }
-
-    function startEdit(id) {
-      const log = state.worklogs.find(w=>w.id===id);
-      if(!log) return;
-      state.editingId=id;
-      const cat1 = log.cat1||'VD글로벌';
-      state.formRows[cat1] = [...log.tasks];
-      state.formDeadlines[cat1] = log.deadline||'';
-      state.formMemos[cat1] = log.note||'';
-      state.formCat2[cat1] = log.cat2||'';
-      render();
-    }
-
-    function copyLog(id) {
-      const log = state.worklogs.find(w=>w.id===id);
-      if(!log) return;
-      const text = `[${log.userName}] ${log.date}\n[${log.cat1}${log.cat2?' > '+log.cat2:''}]\n${log.tasks.join('\n')}${log.deadline?'\n기한: '+log.deadline:''}${log.note?'\n메모: '+log.note:''}`;
-      navigator.clipboard.writeText(text); alert('복사되었습니다!');
-    }
-
-    // 2차 카테고리 관리
-    async function addCat2() {
-      const val = state.newCat2Input.trim();
-      if(!val) return;
-      const newList = [...state.cat2List, {id: Date.now().toString(), name:val}];
-      await setDoc(doc(db,'settings','cat2'),{list:newList});
-      state.newCat2Input=''; render();
-    }
-    async function deleteCat2(id) {
-      const newList = state.cat2List.filter(c=>c.id!==id);
-      await setDoc(doc(db,'settings','cat2'),{list:newList});
-    }
-    async function saveCat2Edit() {
-      const newList = state.cat2List.map(c=>c.id===state.editCat2Id?{...c,name:state.editCat2Val}:c);
-      await setDoc(doc(db,'settings','cat2'),{list:newList});
-      state.editCat2Id=null; state.editCat2Val=''; render();
-    }
-
-    // 공지사항 관리
-    async function addNotice() {
-      const val = state.newNotice.trim();
-      if(!val) return;
-      const userName = teamMembers.find(m=>m.id===state.currentUser)?.name||'';
-      const newList = [...state.notices, {id:Date.now().toString(), text:val, author:userName, date:new Date().toISOString().split('T')[0]}];
-      await setDoc(doc(db,'settings','notices'),{list:newList});
-      state.newNotice=''; render();
-    }
-    async function deleteNotice(id) {
-      const newList = state.notices.filter(n=>n.id!==id);
-      await setDoc(doc(db,'settings','notices'),{list:newList});
-    }
-
-    function catBadge(cat1, cat2) {
-      return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-semibold">${CAT_ICONS[cat1]||'📌'} ${cat1}${cat2?' > '+cat2:''}</span>`;
-    }
-
-    // 달력 렌더
-    function renderMiniCal(monthDate, logs, onClickDay, highlightDate) {
-      const yr = monthDate.getFullYear(), mo = monthDate.getMonth();
-      const daysInMonth = new Date(yr,mo+1,0).getDate();
-      const firstDay = new Date(yr,mo,1).getDay();
-      const months=['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
-      let cells='';
-      for(let i=0;i<firstDay;i++) cells+=`<div></div>`;
-      for(let d=1;d<=daysInMonth;d++){
-        const ds=`${yr}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-        const dl = logs.filter(w=>w.deadline===ds);
-        const isSel = ds===highlightDate;
-        cells+=`<div onclick="${onClickDay}('${ds}')" class="flex flex-col items-center cursor-pointer py-1 rounded text-xs ${isSel?'font-bold text-white':'hover:bg-slate-100'}" style="${isSel?`background:${state.userColor}`:''}">
-          <span>${d}</span>
-          ${dl.length?`<span class="w-1.5 h-1.5 rounded-full mt-0.5" style="background:${state.userColor}"></span>`:''}
-        </div>`;
-      }
-      return `
-        <div class="bg-white rounded-lg shadow p-4 mb-6">
-          <div class="flex items-center justify-between mb-3">
-            <button onclick="prevMyCalMonth()" class="p-1 hover:bg-slate-100 rounded text-slate-600">‹</button>
-            <span class="font-bold text-slate-900 text-sm">${yr}년 ${months[mo]}</span>
-            <button onclick="nextMyCalMonth()" class="p-1 hover:bg-slate-100 rounded text-slate-600">›</button>
-          </div>
-          <div class="grid grid-cols-7 gap-1 text-center text-xs text-slate-500 mb-1">
-            ${['일','월','화','수','목','금','토'].map(d=>`<div>${d}</div>`).join('')}
-          </div>
-          <div class="grid grid-cols-7 gap-1">${cells}</div>
-          ${logs.filter(w=>w.deadline).length?`
-            <div class="mt-3 pt-3 border-t border-slate-100">
-              <p class="text-xs font-semibold text-slate-700 mb-1">📌 이번달 기한 업무</p>
-              ${logs.filter(w=>w.deadline&&w.deadline.startsWith(`${yr}-${String(mo+1).padStart(2,'0')}`))
-                .sort((a,b)=>a.deadline.localeCompare(b.deadline))
-                .map(w=>`<div class="text-xs text-slate-600 flex gap-2 mb-0.5"><span class="text-slate-400">${w.deadline}</span><span>${w.tasks[0]||''}</span></div>`).join('')}
-            </div>`:''}
-        </div>`;
-    }
-
-    function renderMyTab() {
-      const userName = teamMembers.find(m=>m.id===state.currentUser)?.name||'';
-      const myLogs = state.worklogs.filter(w=>w.userId===state.currentUser);
-      const myLogsWithDeadline = myLogs.filter(w=>w.deadline);
-      const today = new Date().toISOString().split('T')[0];
-      const {start,end} = getWeekRange(0);
-      const myTodayLogs = myLogs.filter(w=>w.date===today);
-      const myWeekLogs = myLogs.filter(w=>{ const d=new Date(w.date); return d>=start&&d<=end; });
-
-      return `
-        ${renderMiniCal(state.myCalMonth, myLogsWithDeadline, 'selectMyDate', state.selectedDate)}
-
-        <!-- 입력 폼: 1차 카테고리별 모두 표시 -->
-        <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
-          <h2 class="text-lg font-bold text-slate-900 mb-1">${state.editingId?'업무 수정':'업무 기록'}</h2>
-          <p class="text-xs text-slate-400 mb-4">${userName}님, 진행하신 업무를 기록하세요.</p>
-          <div class="space-y-5">
-            ${CAT1.map(cat1=>`
-              <div class="border border-slate-200 rounded-lg p-4">
-                <div class="flex items-center gap-2 mb-3">
-                  <span class="text-base">${CAT_ICONS[cat1]}</span>
-                  <span class="font-bold text-slate-800 text-sm">${cat1}</span>
-                </div>
-                <!-- 2차 카테고리 -->
-                <div class="mb-2">
-                  <label class="text-xs text-slate-500 mb-1 block">2차 카테고리 (선택)</label>
-                  <select onchange="updateCat2('${cat1}',this.value)" class="w-full px-2 py-1.5 border border-slate-200 rounded text-xs focus:outline-none focus:ring-2">
-                    <option value="">없음</option>
-                    ${state.cat2List.map(c=>`<option value="${c.name}" ${state.formCat2[cat1]===c.name?'selected':''}>${c.name}</option>`).join('')}
-                  </select>
-                </div>
-                <!-- 업무 내용 -->
-                <div class="space-y-1.5 mb-2">
-                  ${(state.formRows[cat1]||['']).map((task,idx)=>`
-                    <div class="flex gap-2 items-center">
-                      <span class="text-xs text-slate-400 font-bold w-4">${idx+1}.</span>
-                      <input type="text" value="${task}" oninput="updateRow('${cat1}',${idx},this.value)"
-                        placeholder="업무 내용을 입력하세요"
-                        class="flex-1 px-2 py-1.5 border border-slate-200 rounded text-xs focus:outline-none focus:ring-2" />
-                      ${(state.formRows[cat1]||['']).length>1?`<button onclick="removeRow('${cat1}',${idx})" class="text-slate-300 hover:text-red-500 text-xs">✕</button>`:''}
-                    </div>`).join('')}
-                  <button onclick="addRow('${cat1}')" class="text-xs mt-1 flex items-center gap-1" style="color:${state.userColor}">+ 업무 추가</button>
-                </div>
-                <!-- 기한 -->
-                <div class="grid grid-cols-2 gap-2">
-                  <div>
-                    <label class="text-xs text-slate-500 mb-1 block">기한 (선택)</label>
-                    <input type="date" value="${state.formDeadlines[cat1]||''}" onchange="updateDeadline('${cat1}',this.value)"
-                      class="w-full px-2 py-1.5 border border-slate-200 rounded text-xs focus:outline-none" />
-                  </div>
-                  <div>
-                    <label class="text-xs text-slate-500 mb-1 block">메모 (선택)</label>
-                    <input type="text" value="${state.formMemos[cat1]||''}" oninput="updateMemo('${cat1}',this.value)" placeholder="메모"
-                      class="w-full px-2 py-1.5 border border-slate-200 rounded text-xs focus:outline-none" />
-                  </div>
-                </div>
-                <button onclick="saveWorklog('${cat1}')" class="mt-3 w-full py-1.5 text-white rounded text-xs font-semibold hover:opacity-90 transition" style="background:${state.userColor}">
-                  ${state.editingId?'수정 완료':'저장'}
-                </button>
-                ${state.editingId?`<button onclick="cancelEdit()" class="mt-1 w-full py-1.5 border border-slate-300 text-slate-600 rounded text-xs hover:bg-slate-50">취소</button>`:''}
-              </div>`).join('')}
-          </div>
-        </div>
-
-        <!-- 일간 로그 -->
-        <div class="bg-white rounded-lg shadow p-4 mb-4">
-          <h3 class="text-sm font-bold text-slate-900 mb-3">📅 오늘 내 업무 (${myTodayLogs.length}건)</h3>
-          ${myTodayLogs.length===0?'<p class="text-xs text-slate-400">오늘 기록된 업무가 없습니다.</p>':
-            myTodayLogs.map(log=>renderLogCard(log,true)).join('')}
-        </div>
-
-        <!-- 주간 로그 -->
-        <div class="bg-white rounded-lg shadow p-4">
-          <h3 class="text-sm font-bold text-slate-900 mb-3">📆 이번주 내 업무 (${myWeekLogs.length}건)</h3>
-          ${myWeekLogs.length===0?'<p class="text-xs text-slate-400">이번주 기록된 업무가 없습니다.</p>':
-            myWeekLogs.map(log=>renderLogCard(log,true)).join('')}
-        </div>`;
-    }
-
-    function renderLogCard(log, showControls) {
-      const daysLeft = log.deadline ? Math.ceil((new Date(log.deadline)-new Date())/86400000) : null;
-      const isUrgent = daysLeft!==null && daysLeft<=3 && daysLeft>=0;
-      return `
-        <div class="border ${isUrgent?'border-red-300 bg-red-50':'border-slate-200 bg-slate-50'} rounded p-3 mb-2">
-          <div class="flex justify-between items-start mb-1.5">
-            <div class="flex items-center gap-2 flex-wrap">
-              ${catBadge(log.cat1||'기타', log.cat2||'')}
-              <span class="text-xs text-slate-500">${log.time}</span>
-              ${log.deadline?`<span class="text-xs px-1.5 py-0.5 rounded font-semibold ${isUrgent?'bg-red-200 text-red-700':'bg-blue-100 text-blue-700'}">📅 ${log.deadline}${daysLeft===0?' (오늘)':daysLeft>0?` (${daysLeft}일 남음)`:' (기한 지남)'}</span>`:''}
-            </div>
-            ${showControls?`
-              <div class="flex gap-1 shrink-0">
-                <button onclick="toggleComplete('${log.id}')" class="p-1 text-xs ${log.completed?'text-green-600':'text-slate-300 hover:text-green-500'}" title="완료">✓</button>
-                <button onclick="startEdit('${log.id}')" class="p-1 text-slate-300 hover:text-blue-500 text-xs" title="수정">✎</button>
-                <button onclick="copyLog('${log.id}')" class="p-1 text-slate-300 hover:text-blue-500 text-xs" title="복사">⎘</button>
-                <button onclick="confirmDelete('${log.id}')" class="p-1 text-slate-300 hover:text-red-500 text-xs" title="삭제">✕</button>
-              </div>`:''}
-          </div>
-          <ul class="space-y-0.5 ml-1">
-            ${log.tasks.map(t=>`<li class="text-xs flex gap-1 ${log.completed?'line-through text-slate-400':'text-slate-700'}"><span class="text-slate-400">•</span><span>${t}</span></li>`).join('')}
-          </ul>
-          ${log.note?`<p class="text-xs text-slate-400 italic mt-1">📌 ${log.note}</p>`:''}
-        </div>`;
-    }
-
-    function renderCalendarTab() {
-      const yr = state.currentMonth.getFullYear(), mo = state.currentMonth.getMonth();
-      const daysInMonth = new Date(yr,mo+1,0).getDate();
-      const firstDay = new Date(yr,mo,1).getDay();
-      const months=['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
-
-      // 캘린더 기준: 기한(deadline)이 설정된 로그만
-      let cells='';
-      for(let i=0;i<firstDay;i++) cells+=`<div class="p-1 h-20"></div>`;
-      for(let d=1;d<=daysInMonth;d++){
-        const ds=`${yr}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-        const isSel=ds===state.selectedDate;
-        const dlLogs = state.worklogs.filter(w=>w.deadline===ds);
-        const userIdSet=[...new Set(dlLogs.map(w=>w.userId))];
-        cells+=`<div onclick="selectDate('${ds}')" class="p-1 h-20 border rounded cursor-pointer transition text-xs ${isSel?'text-white':'dlLogs.length?bg-slate-100 border-slate-300':'bg-white border-slate-200 hover:bg-slate-50'}"
-          style="${isSel?`background:${state.userColor};border-color:${state.userColor}`:''}">
-          <div class="font-semibold">${d}</div>
-          ${dlLogs.length?`
-            <div class="flex gap-0.5 mt-1 flex-wrap">${userIdSet.map(uid=>`<span class="inline-block w-2 h-2 rounded-full" style="background:${userColors[uid]||'#999'}"></span>`).join('')}</div>
-            <div class="text-xs mt-0.5 ${isSel?'text-white':'text-slate-500'}">${dlLogs.length}건</div>`:''}
-        </div>`;
-      }
-
-      const selLogs = state.worklogs.filter(w=>w.deadline===state.selectedDate);
-      return `
-        <div class="grid gap-6" style="grid-template-columns:2fr 1fr">
-          <div class="bg-white rounded-lg shadow p-6">
-            <div class="flex items-center justify-between mb-4">
-              <div class="flex gap-2">
-                <select onchange="setCalYear(this.value)" class="px-2 py-1.5 border border-slate-300 rounded text-sm">
-                  ${[2024,2025,2026].map(y=>`<option ${yr===y?'selected':''} value="${y}">${y}년</option>`).join('')}
-                </select>
-                <select onchange="setCalMonth(this.value)" class="px-2 py-1.5 border border-slate-300 rounded text-sm">
-                  ${months.map((m,i)=>`<option ${mo===i?'selected':''} value="${i}">${m}</option>`).join('')}
-                </select>
-              </div>
-              <div class="flex gap-1">
-                <button onclick="prevMonth()" class="p-1.5 hover:bg-slate-100 rounded">‹</button>
-                <button onclick="nextMonth()" class="p-1.5 hover:bg-slate-100 rounded">›</button>
-              </div>
-            </div>
-            <p class="text-xs text-slate-400 mb-3">📌 기한이 설정된 업무 기준으로 표시됩니다.</p>
-            <div class="grid grid-cols-7 gap-1 mb-1">${['일','월','화','수','목','금','토'].map(d=>`<div class="text-center text-xs font-semibold text-slate-500 py-1">${d}</div>`).join('')}</div>
-            <div class="grid grid-cols-7 gap-1">${cells}</div>
-          </div>
-          <div class="bg-white rounded-lg shadow p-4 h-fit">
-            <h3 class="text-sm font-bold text-slate-900 mb-3">
-              ${new Date(state.selectedDate+'T12:00:00').toLocaleDateString('ko-KR',{month:'long',day:'numeric',weekday:'short'})} 기한 업무
-            </h3>
-            ${selLogs.length===0?'<p class="text-xs text-slate-400">이 날짜가 기한인 업무가 없습니다.</p>':
-              selLogs.map(log=>`
-                <div class="border border-slate-200 rounded p-2 mb-2 bg-slate-50">
-                  <div class="flex items-center gap-1.5 flex-wrap mb-1">
-                    <span class="inline-block w-2 h-2 rounded-full" style="background:${userColors[log.userId]}"></span>
-                    <span class="font-semibold text-xs text-slate-800">${log.userName}</span>
-                    ${catBadge(log.cat1||'기타',log.cat2||'')}
-                  </div>
-                  <ul>${log.tasks.map(t=>`<li class="text-xs text-slate-700">• ${t}</li>`).join('')}</ul>
-                </div>`).join('')}
-          </div>
-        </div>`;
-    }
-
-    function renderReport() {
-      const {start,end} = getWeekRange(state.reportWeekOffset);
-      const weekLogs = state.worklogs.filter(w=>{ const d=new Date(w.date); return d>=start&&d<=end; });
-      const startOfYear = new Date(start.getFullYear(),0,1);
-      const weekNum = Math.ceil((Math.abs(start-startOfYear)/86400000)/7);
-
-      const catByTask = {};
-      CAT1.forEach(cat=>{ catByTask[cat]=weekLogs.filter(w=>w.cat1===cat).flatMap(w=>w.tasks); });
-
-      const keywordMap={};
-      weekLogs.forEach(log=>log.tasks.forEach(task=>task.split(/[\s,()]/).filter(w=>w.length>1).forEach(w=>{keywordMap[w]=(keywordMap[w]||0)+1;})));
-      const topKw = Object.entries(keywordMap).sort((a,b)=>b[1]-a[1]).slice(0,10);
-
-      return `
-        <div class="space-y-6">
-          <!-- 헤더 + 주차 이동 -->
-          <div class="bg-white rounded-lg shadow p-6">
-            <div class="flex items-center justify-between">
-              <div>
-                <h2 class="text-xl font-bold text-slate-900">주간 업무보고서</h2>
-                <p class="text-xs text-slate-500 mt-1">${start.toLocaleDateString('ko-KR')} ~ ${end.toLocaleDateString('ko-KR')} · ${start.getMonth()+1}월 ${Math.ceil(start.getDate()/7)}주차 · W${String(weekNum).padStart(2,'0')}</p>
-              </div>
-              <div class="flex gap-2">
-                <button onclick="reportPrevWeek()" class="px-3 py-1.5 border border-slate-300 rounded text-xs hover:bg-slate-50">‹ 이전주</button>
-                <button onclick="reportThisWeek()" class="px-3 py-1.5 border rounded text-xs text-white hover:opacity-90" style="background:${state.userColor}">이번주</button>
-                <button onclick="reportNextWeek()" class="px-3 py-1.5 border border-slate-300 rounded text-xs hover:bg-slate-50">다음주 ›</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- 주요 공지사항 -->
-          <div class="bg-white rounded-lg shadow p-6">
-            <h3 class="text-lg font-bold text-slate-900 mb-3">📢 주요 공지사항</h3>
-            <div class="flex gap-2 mb-3">
-              <input type="text" id="noticeInput" value="${state.newNotice}" oninput="updateNoticeInput(this.value)" placeholder="공지사항을 입력하세요"
-                class="flex-1 px-3 py-1.5 border border-slate-300 rounded text-xs focus:outline-none focus:ring-2" />
-              <button onclick="addNotice()" class="px-3 py-1.5 text-white rounded text-xs font-semibold hover:opacity-90" style="background:${state.userColor}">등록</button>
-            </div>
-            ${state.notices.length===0?'<p class="text-xs text-slate-400">등록된 공지사항이 없습니다.</p>':
-              state.notices.map(n=>`
-                <div class="flex justify-between items-start border border-slate-200 rounded p-3 mb-2 bg-slate-50">
-                  <div>
-                    <p class="text-xs text-slate-800">${n.text}</p>
-                    <p class="text-xs text-slate-400 mt-0.5">${n.author} · ${n.date}</p>
-                  </div>
-                  <button onclick="deleteNotice('${n.id}')" class="text-slate-300 hover:text-red-500 text-xs ml-2">✕</button>
-                </div>`).join('')}
-          </div>
-
-          <!-- 이번주 주요 업무 -->
-          <div class="bg-white rounded-lg shadow p-6">
-            <h3 class="text-lg font-bold text-slate-900 mb-4">1. 이번주 주요 진행 업무</h3>
-            <div class="grid grid-cols-2 gap-4">
-              ${CAT1.map((cat,ci)=>`
-                <div class="border-l-4 border-blue-500 pl-3">
-                  <h4 class="font-semibold text-sm text-slate-900 mb-2">1.${ci+1} ${CAT_ICONS[cat]} ${cat}</h4>
-                  ${catByTask[cat]?.length?`
-                    <ul class="space-y-1">${catByTask[cat].slice(0,5).map(t=>`<li class="text-xs text-slate-700 flex gap-1"><span class="text-slate-400">•</span><span>${t}</span></li>`).join('')}
-                    ${catByTask[cat].length>5?`<li class="text-xs text-slate-500">+ ${catByTask[cat].length-5}개</li>`:''}</ul>
-                    <button onclick="navigator.clipboard.writeText('${catByTask[cat].join('\\n')}').then(()=>alert('복사됐습니다!'))" class="text-xs mt-2 flex items-center gap-1" style="color:${state.userColor}">⎘ 복사</button>
-                  `:'<p class="text-xs text-slate-400">기록된 업무 없음</p>'}
-                </div>`).join('')}
-            </div>
-          </div>
-
-          <!-- 팀원별 -->
-          <div class="bg-white rounded-lg shadow p-6">
-            <h3 class="text-lg font-bold text-slate-900 mb-4">팀원별 주간 업무</h3>
-            ${teamMembers.map(member=>{
-              const ml = weekLogs.filter(w=>w.userId===member.id);
-              return `
-                <div class="border border-slate-200 rounded p-3 mb-3">
-                  <div class="flex items-center gap-2 mb-2">
-                    <span class="inline-block w-3 h-3 rounded-full" style="background:${userColors[member.id]}"></span>
-                    <span class="font-semibold text-sm text-slate-900">${member.name}</span>
-                    <span class="text-xs text-slate-400">(${ml.length}건)</span>
-                  </div>
-                  ${ml.length===0?'<p class="text-xs text-slate-400">기록 없음</p>':`
-                    <ul class="space-y-0.5 ml-4">${ml.flatMap(l=>l.tasks).map(t=>`<li class="text-xs text-slate-700">• ${t}</li>`).join('')}</ul>`}
-                </div>`;}).join('')}
-          </div>
-
-          <!-- 키워드 -->
-          <div class="bg-white rounded-lg shadow p-6">
-            <h3 class="text-lg font-bold text-slate-900 mb-3">주요 키워드</h3>
-            ${topKw.length===0?'<p class="text-xs text-slate-400">데이터 없음</p>':topKw.map(([kw,cnt],i)=>`
-              <div class="flex items-center gap-2 mb-2">
-                <div class="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold text-white" style="background:${state.userColor}">${i+1}</div>
-                <span class="flex-1 text-sm text-slate-800">${kw}</span>
-                <span class="text-xs text-slate-400">${cnt}회</span>
-                <div class="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                  <div class="h-full rounded-full" style="background:${state.userColor};width:${(cnt/topKw[0][1])*100}%"></div>
-                </div>
-              </div>`).join('')}
-          </div>
-        </div>`;
-    }
-
-    function renderFuture() {
-      const withDL = state.worklogs.filter(w=>w.deadline)
-        .sort((a,b)=>a.deadline.localeCompare(b.deadline));
-      const withoutDL = state.worklogs.filter(w=>!w.deadline);
-      return `
-        <div class="space-y-6">
-          <div class="bg-white rounded-lg shadow p-6"><h2 class="text-2xl font-bold text-slate-900">🎯 향후 일정</h2></div>
-          <div class="bg-white rounded-lg shadow p-6">
-            <h3 class="text-lg font-bold text-slate-900 mb-4">⏰ 기한이 있는 업무</h3>
-            ${withDL.length===0?'<p class="text-xs text-slate-400">없습니다.</p>':withDL.map(log=>{
-              const dl=log.deadline, daysLeft=Math.ceil((new Date(dl)-new Date())/86400000);
-              const urgent=daysLeft<=3&&daysLeft>=0;
-              return `
-                <div class="border rounded-lg p-4 mb-3 ${urgent?'border-red-400 bg-red-50':'border-slate-200'}">
-                  <div class="flex items-center gap-2 mb-2 flex-wrap">
-                    <span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${userColors[log.userId]}"></span>
-                    ${catBadge(log.cat1||'기타',log.cat2||'')}
-                    <span class="font-semibold text-sm text-slate-900">${log.userName}</span>
-                    <span class="text-xs font-bold px-2 py-0.5 rounded ${urgent?'bg-red-200 text-red-700':'bg-blue-100 text-blue-700'}">
-                      📅 ${dl} ${daysLeft<0?'(기한 지남)':daysLeft===0?'(오늘)':`(${daysLeft}일 남음)`}
-                    </span>
-                  </div>
-                  <ul class="ml-4">${log.tasks.map(t=>`<li class="text-xs text-slate-700">• ${t}</li>`).join('')}</ul>
-                </div>`;}).join('')}
-          </div>
-          <div class="bg-white rounded-lg shadow p-6">
-            <h3 class="text-lg font-bold text-slate-900 mb-4">📋 기한 없는 업무</h3>
-            ${withoutDL.length===0?'<p class="text-xs text-slate-400">없습니다.</p>':withoutDL.map(log=>`
-              <div class="border border-slate-200 rounded-lg p-4 mb-3">
-                <div class="flex items-center gap-2 mb-2 flex-wrap">
-                  <span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${userColors[log.userId]}"></span>
-                  ${catBadge(log.cat1||'기타',log.cat2||'')}
-                  <span class="font-semibold text-sm text-slate-900">${log.userName}</span>
-                  <span class="text-xs text-slate-500">${log.date}</span>
-                </div>
-                <ul class="ml-4">${log.tasks.map(t=>`<li class="text-xs text-slate-700">• ${t}</li>`).join('')}</ul>
-              </div>`).join('')}
-          </div>
-        </div>`;
-    }
-
-    function renderSettings() {
-      return `
-        <div class="max-w-lg space-y-6">
-          <div class="bg-white rounded-lg shadow p-6">
-            <h2 class="text-xl font-bold text-slate-900 mb-1">⚙️ 설정</h2>
-            <p class="text-xs text-slate-400 mb-6">2차 카테고리 및 앱 설정을 관리합니다.</p>
-
-            <!-- 2차 카테고리 관리 -->
-            <h3 class="text-sm font-bold text-slate-800 mb-3">2차 카테고리 관리</h3>
-            <div class="flex gap-2 mb-4">
-              <input type="text" id="cat2Input" value="${state.newCat2Input}" oninput="updateCat2Input(this.value)" placeholder="새 2차 카테고리 입력"
-                class="flex-1 px-3 py-1.5 border border-slate-300 rounded text-xs focus:outline-none focus:ring-2" />
-              <button onclick="addCat2()" class="px-3 py-1.5 text-white rounded text-xs font-semibold hover:opacity-90" style="background:${state.userColor}">추가</button>
-            </div>
-            ${state.cat2List.length===0?'<p class="text-xs text-slate-400">등록된 2차 카테고리가 없습니다.</p>':
-              state.cat2List.map(c=>`
-                <div class="flex items-center gap-2 border border-slate-200 rounded px-3 py-2 mb-2">
-                  ${state.editCat2Id===c.id?`
-                    <input type="text" value="${state.editCat2Val}" oninput="updateCat2EditVal(this.value)" class="flex-1 px-2 py-1 border border-slate-300 rounded text-xs focus:outline-none" />
-                    <button onclick="saveCat2Edit()" class="text-xs text-white px-2 py-1 rounded" style="background:${state.userColor}">저장</button>
-                    <button onclick="cancelCat2Edit()" class="text-xs text-slate-500 hover:text-slate-700">취소</button>
-                  `:`
-                    <span class="flex-1 text-sm text-slate-800">${c.name}</span>
-                    <button onclick="startCat2Edit('${c.id}','${c.name}')" class="text-xs text-slate-400 hover:text-blue-500">✎</button>
-                    <button onclick="deleteCat2('${c.id}')" class="text-xs text-slate-400 hover:text-red-500">✕</button>
-                  `}
-                </div>`).join('')}
-
-            <hr class="my-6 border-slate-200" />
-
-            <!-- 팀원 색상 범례 -->
-            <h3 class="text-sm font-bold text-slate-800 mb-3">담당자 색상</h3>
-            <div class="grid grid-cols-2 gap-2">
-              ${teamMembers.map(m=>`
-                <div class="flex items-center gap-2">
-                  <span class="inline-block w-3 h-3 rounded-full" style="background:${userColors[m.id]}"></span>
-                  <span class="text-xs text-slate-700">${m.name}</span>
-                </div>`).join('')}
-            </div>
-
-            <hr class="my-6 border-slate-200" />
-
-            <!-- 1차 카테고리 아이콘 -->
-            <h3 class="text-sm font-bold text-slate-800 mb-3">1차 카테고리</h3>
-            <div class="space-y-1.5">
-              ${CAT1.map(cat=>`
-                <div class="flex items-center gap-2">
-                  <span>${CAT_ICONS[cat]}</span>
-                  <span class="text-xs text-slate-700">${cat}</span>
-                </div>`).join('')}
-            </div>
-          </div>
-        </div>`;
-    }
-
-    function renderDeleteConfirm() {
-      if(!state.deleteConfirmId) return '';
-      return `
-        <div class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
-          <div class="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4">
-            <h3 class="text-lg font-bold text-slate-900 mb-2">삭제 확인</h3>
-            <p class="text-sm text-slate-600 mb-5">정말로 삭제하시겠습니까?<br>삭제된 업무는 복구할 수 없습니다.</p>
-            <div class="flex gap-3">
-              <button onclick="doDelete()" class="flex-1 py-2 bg-red-500 text-white rounded font-semibold text-sm hover:bg-red-600">삭제</button>
-              <button onclick="cancelDelete()" class="flex-1 py-2 border-2 border-slate-300 text-slate-600 rounded font-semibold text-sm hover:bg-slate-50">취소</button>
-            </div>
-          </div>
-        </div>`;
-    }
-
-    function render() {
-      const root = document.getElementById('root');
-      if(!state.currentUser) { root.innerHTML = renderLogin(); return; }
-      const tabs = [
-        {id:'my',label:'📝 나의 업무'},{id:'calendar',label:'📅 캘린더'},
-        {id:'report',label:'📊 주간보고서'},{id:'future',label:'🎯 향후 일정'},
-        {id:'settings',label:'⚙️ 설정'},
-      ];
-      let content='';
-      if(state.view==='my') content=renderMyTab();
-      else if(state.view==='calendar') content=renderCalendarTab();
-      else if(state.view==='report') content=renderReport();
-      else if(state.view==='future') content=renderFuture();
-      else if(state.view==='settings') content=renderSettings();
-
-      root.innerHTML = `
-        ${renderDeleteConfirm()}
-        <div class="min-h-screen bg-slate-50">
-          <div class="sticky top-0 z-40 border-b border-slate-200" style="background:${state.userColor}">
-            <div class="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
-              <h1 class="text-xl font-bold text-white">CAG마케팅유닛 워크로그</h1>
-              <div class="flex items-center gap-3">
-                <span class="text-white text-sm font-semibold">${teamMembers.find(m=>m.id===state.currentUser)?.name||''}</span>
-                <button onclick="logout()" class="text-white text-xs opacity-70 hover:opacity-100">로그아웃</button>
-              </div>
-            </div>
-          </div>
-          <div class="max-w-6xl mx-auto px-6 py-6">
-            <div class="flex gap-1 mb-6 border-b border-slate-200 overflow-x-auto">
-              ${tabs.map(tab=>`
-                <button onclick="setView('${tab.id}')" class="px-4 py-2.5 text-sm font-medium transition whitespace-nowrap ${state.view===tab.id?'border-b-2':' text-slate-500 hover:text-slate-800'}"
-                  style="${state.view===tab.id?`color:${state.userColor};border-color:${state.userColor}`:''}">
-                  ${tab.label}
-                </button>`).join('')}
-            </div>
-            ${content}
-          </div>
-        </div>`;
-    }
-
-    function renderLogin() {
-      return `
-        <div class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-          <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
-            <div class="text-center mb-8">
-              <div class="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mb-4 text-3xl">📋</div>
-              <h1 class="text-2xl font-bold text-slate-900">CAG마케팅유닛 워크로그</h1>
-              <p class="text-slate-500 mt-2 text-sm">팀원을 선택해 로그인하세요</p>
-            </div>
-            <div class="space-y-2">
-              ${teamMembers.map(m=>`
-                <button onclick="login('${m.id}')" class="w-full p-3.5 text-left border-2 border-slate-200 rounded-lg hover:border-blue-400 hover:bg-blue-50 transition font-medium text-slate-800 flex items-center gap-3">
-                  <span class="inline-block w-3 h-3 rounded-full" style="background:${userColors[m.id]}"></span>${m.name}
-                </button>`).join('')}
-            </div>
-          </div>
-        </div>`;
-    }
-
-    // 전역 함수
-    window.login = (uid) => { state.currentUser=uid; state.userColor=userColors[uid]; render(); };
-    window.logout = () => { state.currentUser=null; state.userColor=null; render(); };
-    window.setView = (v) => { state.view=v; render(); };
-    window.selectDate = (d) => { state.selectedDate=d; render(); };
-    window.selectMyDate = (d) => { state.selectedDate=d; render(); };
-    window.prevMyCalMonth = () => { state.myCalMonth=new Date(state.myCalMonth.getFullYear(),state.myCalMonth.getMonth()-1); render(); };
-    window.nextMyCalMonth = () => { state.myCalMonth=new Date(state.myCalMonth.getFullYear(),state.myCalMonth.getMonth()+1); render(); };
-    window.prevMonth = () => { state.currentMonth=new Date(state.currentMonth.getFullYear(),state.currentMonth.getMonth()-1); render(); };
-    window.nextMonth = () => { state.currentMonth=new Date(state.currentMonth.getFullYear(),state.currentMonth.getMonth()+1); render(); };
-    window.setCalYear = (y) => { state.currentMonth=new Date(parseInt(y),state.currentMonth.getMonth()); render(); };
-    window.setCalMonth = (m) => { state.currentMonth=new Date(state.currentMonth.getFullYear(),parseInt(m)); render(); };
-    window.updateRow = (cat,i,v) => { if(!state.formRows[cat]) state.formRows[cat]=['']; state.formRows[cat][i]=v; };
-    window.addRow = (cat) => { if(!state.formRows[cat]) state.formRows[cat]=[''];  state.formRows[cat].push(''); render(); };
-    window.removeRow = (cat,i) => { state.formRows[cat].splice(i,1); render(); };
-    window.updateDeadline = (cat,v) => { state.formDeadlines[cat]=v; };
-    window.updateMemo = (cat,v) => { state.formMemos[cat]=v; };
-    window.updateCat2 = (cat,v) => { state.formCat2[cat]=v; };
-    window.saveWorklog = saveWorklog;
-    window.cancelEdit = () => { state.editingId=null; CAT1.forEach(c=>{state.formRows[c]=[''];state.formDeadlines[c]='';state.formMemos[c]='';state.formCat2[c]='';}) ; render(); };
-    window.startEdit = startEdit;
-    window.confirmDelete = confirmDelete;
-    window.doDelete = doDelete;
-    window.cancelDelete = cancelDelete;
-    window.toggleComplete = toggleComplete;
-    window.copyLog = copyLog;
-    window.addCat2 = addCat2;
-    window.deleteCat2 = deleteCat2;
-    window.saveCat2Edit = saveCat2Edit;
-    window.updateCat2Input = (v) => { state.newCat2Input=v; };
-    window.startCat2Edit = (id,val) => { state.editCat2Id=id; state.editCat2Val=val; render(); };
-    window.cancelCat2Edit = () => { state.editCat2Id=null; state.editCat2Val=''; render(); };
-    window.updateCat2EditVal = (v) => { state.editCat2Val=v; };
-    window.addNotice = addNotice;
-    window.deleteNotice = deleteNotice;
-    window.updateNoticeInput = (v) => { state.newNotice=v; };
-    window.reportPrevWeek = () => { state.reportWeekOffset--; render(); };
-    window.reportNextWeek = () => { state.reportWeekOffset++; render(); };
-    window.reportThisWeek = () => { state.reportWeekOffset=0; render(); };
-
-    render();
-  </script>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>CAG마케팅유닛 워크로그</title>
+<script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body><div id="root"></div></body>
+<body>
+<div id="root"></div>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, setDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCBUprzRAVme2c4DlDH2JRV6blPmQ7awnM",
+  authDomain: "cag-mkt-worklog.firebaseapp.com",
+  projectId: "cag-mkt-worklog",
+  storageBucket: "cag-mkt-worklog.firebasestorage.app",
+  messagingSenderId: "318995097468",
+  appId: "1:318995097468:web:0934b2591bfe66be9fa6f9"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+const CAT1 = ['VD글로벌','VD중국','마영전','기타'];
+const CAT_ICONS = {'VD글로벌':'🌍','VD중국':'🇨🇳','마영전':'📊','기타':'📌'};
+const USER_COLORS = {user1:'#3b82f6',user2:'#ef4444',user3:'#10b981',user4:'#a855f7',user5:'#f97316',user6:'#ec4899',user7:'#06b6d4',user8:'#f59e0b'};
+const MEMBERS = [{id:'user1',name:'한지혜'},{id:'user2',name:'김지선'},{id:'user3',name:'이소연'},{id:'user4',name:'박수민'},{id:'user5',name:'유은지'},{id:'user6',name:'김민정'},{id:'user7',name:'권세봉'},{id:'user8',name:'전룡'}];
+
+let S = {
+  user: null, color: null, view: 'my',
+  selDate: new Date().toISOString().split('T')[0],
+  calMonth: new Date(), myCalMonth: new Date(),
+  logs: [], cat2: [], notices: [],
+  form: { VD글로벌:{tasks:[''],cat2:'',deadline:'',memo:''}, VD중국:{tasks:[''],cat2:'',deadline:'',memo:''}, 마영전:{tasks:[''],cat2:'',deadline:'',memo:''}, 기타:{tasks:[''],cat2:'',deadline:'',memo:''} },
+  editId: null, delId: null,
+  newCat2: '', editCat2: null, editCat2Val: '',
+  newNotice: '', weekOffset: 0,
+};
+
+// Realtime listeners
+onSnapshot(query(collection(db,'worklogs'),orderBy('createdAt','desc')), snap => {
+  S.logs = snap.docs.map(d=>({id:d.id,...d.data()})); render();
+});
+onSnapshot(doc(db,'settings','cat2'), snap => {
+  S.cat2 = snap.exists() ? (snap.data().list||[]) : []; render();
+});
+onSnapshot(doc(db,'settings','notices'), snap => {
+  S.notices = snap.exists() ? (snap.data().list||[]) : []; render();
+});
+
+function now() {
+  const d = new Date();
+  return d.toISOString().split('T')[0]+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
+
+function userName() { return MEMBERS.find(m=>m.id===S.user)?.name||''; }
+
+function weekRange(off) {
+  const t = new Date(), mon = new Date(t);
+  mon.setDate(t.getDate()-t.getDay()+1+(off*7));
+  const sun = new Date(mon); sun.setDate(mon.getDate()+6);
+  return {s:mon, e:sun};
+}
+
+function daysLeft(deadline) {
+  return Math.ceil((new Date(deadline)-new Date())/86400000);
+}
+
+function badge(cat1, cat2) {
+  return '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;background:#f1f5f9;color:#475569;font-size:11px;font-weight:600;">'+
+    (CAT_ICONS[cat1]||'📌')+' '+cat1+(cat2?' › '+cat2:'')+'</span>';
+}
+
+// Save worklog
+async function saveLog(cat1) {
+  const f = S.form[cat1];
+  const tasks = f.tasks.filter(t=>t.trim());
+  if (!tasks.length) { alert(cat1+' 업무 내용을 입력해주세요.'); return; }
+  const data = {
+    userId:S.user, userName:userName(), date:new Date().toISOString().split('T')[0],
+    time:now(), cat1, cat2:f.cat2||'', tasks, completed:false,
+    deadline:f.deadline||'', note:f.memo||'', createdAt:new Date().toISOString()
+  };
+  if (S.editId) {
+    await updateDoc(doc(db,'worklogs',S.editId), data);
+    S.editId = null;
+  } else {
+    await addDoc(collection(db,'worklogs'), data);
+  }
+  S.form[cat1] = {tasks:[''],cat2:'',deadline:'',memo:''};
+  render();
+}
+
+async function doDelete() {
+  if (S.delId) { await deleteDoc(doc(db,'worklogs',S.delId)); S.delId=null; render(); }
+}
+
+async function toggleDone(id) {
+  const l = S.logs.find(w=>w.id===id);
+  if (l) await updateDoc(doc(db,'worklogs',id),{completed:!l.completed});
+}
+
+function startEdit(id) {
+  const l = S.logs.find(w=>w.id===id);
+  if (!l) return;
+  S.editId = id;
+  S.form[l.cat1] = {tasks:[...l.tasks], cat2:l.cat2||'', deadline:l.deadline||'', memo:l.note||''};
+  render();
+}
+
+function copyLog(id) {
+  const l = S.logs.find(w=>w.id===id);
+  if (!l) return;
+  navigator.clipboard.writeText('['+l.userName+'] '+l.date+'\n['+l.cat1+(l.cat2?' › '+l.cat2:'')+' ]\n'+l.tasks.join('\n')+(l.deadline?'\n기한: '+l.deadline:'')+(l.note?'\n메모: '+l.note:''));
+  alert('복사되었습니다!');
+}
+
+async function addCat2() {
+  const v = S.newCat2.trim(); if (!v) return;
+  await setDoc(doc(db,'settings','cat2'),{list:[...S.cat2,{id:Date.now()+'',name:v}]});
+  S.newCat2=''; render();
+}
+async function delCat2(id) { await setDoc(doc(db,'settings','cat2'),{list:S.cat2.filter(c=>c.id!==id)}); }
+async function saveCat2Edit() {
+  await setDoc(doc(db,'settings','cat2'),{list:S.cat2.map(c=>c.id===S.editCat2?{...c,name:S.editCat2Val}:c)});
+  S.editCat2=null; S.editCat2Val=''; render();
+}
+
+async function addNotice() {
+  const v = S.newNotice.trim(); if (!v) return;
+  const item = {id:Date.now()+'',text:v,author:userName(),date:new Date().toISOString().split('T')[0]};
+  await setDoc(doc(db,'settings','notices'),{list:[...S.notices,item]});
+  S.newNotice=''; render();
+}
+async function delNotice(id) { await setDoc(doc(db,'settings','notices'),{list:S.notices.filter(n=>n.id!==id)}); }
+
+// ── RENDER ──────────────────────────────────────────────
+function render() {
+  document.getElementById('root').innerHTML = S.user ? renderApp() : renderLogin();
+}
+
+function renderLogin() {
+  return `<div style="min-height:100vh;background:linear-gradient(135deg,#eff6ff,#e0e7ff);display:flex;align-items:center;justify-content:center;padding:16px;">
+    <div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.12);padding:32px;max-width:400px;width:100%;">
+      <div style="text-align:center;margin-bottom:32px;">
+        <div style="font-size:40px;margin-bottom:12px;">📋</div>
+        <h1 style="font-size:22px;font-weight:800;color:#0f172a;margin:0 0 8px;">CAG마케팅유닛 워크로그</h1>
+        <p style="color:#94a3b8;font-size:14px;margin:0;">팀원을 선택해 로그인하세요</p>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        ${MEMBERS.map(m=>`<button onclick="window._login('${m.id}')" style="padding:14px 16px;border:2px solid #e2e8f0;border-radius:10px;background:#fff;text-align:left;cursor:pointer;font-size:15px;font-weight:600;color:#1e293b;display:flex;align-items:center;gap:10px;" onmouseover="this.style.borderColor='#3b82f6';this.style.background='#eff6ff'" onmouseout="this.style.borderColor='#e2e8f0';this.style.background='#fff'">
+          <span style="width:12px;height:12px;border-radius:50%;background:${USER_COLORS[m.id]};display:inline-block;"></span>${m.name}
+        </button>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderApp() {
+  const tabs = [{id:'my',label:'📝 나의 업무'},{id:'calendar',label:'📅 캘린더'},{id:'report',label:'📊 주간보고서'},{id:'future',label:'🎯 향후 일정'},{id:'settings',label:'⚙️ 설정'}];
+  let body = '';
+  if (S.view==='my') body = renderMy();
+  else if (S.view==='calendar') body = renderCalendar();
+  else if (S.view==='report') body = renderReport();
+  else if (S.view==='future') body = renderFuture();
+  else if (S.view==='settings') body = renderSettings();
+
+  return `
+    ${S.delId ? renderDelModal() : ''}
+    <div style="min-height:100vh;background:#f8fafc;">
+      <div style="background:${S.color};position:sticky;top:0;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.15);">
+        <div style="max-width:1100px;margin:0 auto;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;">
+          <h1 style="color:#fff;font-size:18px;font-weight:800;margin:0;">CAG마케팅유닛 워크로그</h1>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <span style="color:#fff;font-weight:600;font-size:14px;">${userName()}</span>
+            <button onclick="window._logout()" style="color:rgba(255,255,255,0.8);font-size:12px;background:none;border:none;cursor:pointer;">로그아웃</button>
+          </div>
+        </div>
+      </div>
+      <div style="max-width:1100px;margin:0 auto;padding:24px;">
+        <div style="display:flex;gap:4px;border-bottom:2px solid #e2e8f0;margin-bottom:24px;overflow-x:auto;">
+          ${tabs.map(t=>`<button onclick="window._view('${t.id}')" style="padding:10px 16px;font-size:13px;font-weight:600;white-space:nowrap;background:none;border:none;cursor:pointer;border-bottom:${S.view===t.id?'3px solid '+S.color:'3px solid transparent'};color:${S.view===t.id?S.color:'#64748b'};">${t.label}</button>`).join('')}
+        </div>
+        ${body}
+      </div>
+    </div>`;
+}
+
+function renderDelModal() {
+  return `<div style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:999;display:flex;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:12px;padding:24px;max-width:320px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.2);">
+      <h3 style="font-size:17px;font-weight:700;color:#0f172a;margin:0 0 8px;">삭제 확인</h3>
+      <p style="color:#64748b;font-size:14px;margin:0 0 20px;">정말로 삭제하시겠습니까?<br>삭제된 업무는 복구할 수 없습니다.</p>
+      <div style="display:flex;gap:8px;">
+        <button onclick="window._doDelete()" style="flex:1;padding:10px;background:#ef4444;color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;">삭제</button>
+        <button onclick="window._cancelDel()" style="flex:1;padding:10px;background:#f1f5f9;color:#475569;border:none;border-radius:8px;font-weight:700;cursor:pointer;">취소</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function logCard(log, mine) {
+  const dl = log.deadline ? daysLeft(log.deadline) : null;
+  const urgent = dl !== null && dl <= 3 && dl >= 0;
+  return `<div style="border:1px solid ${urgent?'#fca5a5':'#e2e8f0'};border-radius:8px;padding:12px;margin-bottom:8px;background:${urgent?'#fff1f2':'#f8fafc'};">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;flex-wrap:wrap;gap:4px;">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+        ${badge(log.cat1||'기타', log.cat2||'')}
+        <span style="font-size:11px;color:#94a3b8;">${log.time}</span>
+        ${log.deadline?`<span style="font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px;background:${urgent?'#fee2e2':'#dbeafe'};color:${urgent?'#b91c1c':'#1d4ed8'};">📅 ${log.deadline} ${dl===0?'(오늘)':dl<0?'(기한 지남)':`(${dl}일 남음)`}</span>`:''}
+      </div>
+      ${mine?`<div style="display:flex;gap:2px;">
+        <button onclick="window._done('${log.id}')" style="padding:4px 6px;border:none;background:none;cursor:pointer;font-size:14px;color:${log.completed?'#16a34a':'#cbd5e1'};" title="완료">✓</button>
+        <button onclick="window._edit('${log.id}')" style="padding:4px 6px;border:none;background:none;cursor:pointer;font-size:14px;color:#cbd5e1;" title="수정">✎</button>
+        <button onclick="window._copy('${log.id}')" style="padding:4px 6px;border:none;background:none;cursor:pointer;font-size:14px;color:#cbd5e1;" title="복사">⎘</button>
+        <button onclick="window._del('${log.id}')" style="padding:4px 6px;border:none;background:none;cursor:pointer;font-size:14px;color:#cbd5e1;" title="삭제">✕</button>
+      </div>`:''}
+    </div>
+    <ul style="margin:0;padding-left:16px;">
+      ${log.tasks.map(t=>`<li style="font-size:12px;color:${log.completed?'#94a3b8':'#334155'};${log.completed?'text-decoration:line-through;':''}">${t}</li>`).join('')}
+    </ul>
+    ${log.note?`<p style="font-size:11px;color:#94a3b8;margin:4px 0 0;font-style:italic;">📌 ${log.note}</p>`:''}
+  </div>`;
+}
+
+function miniCal(monthDate, deadlineLogs) {
+  const yr=monthDate.getFullYear(), mo=monthDate.getMonth();
+  const dim=new Date(yr,mo+1,0).getDate(), fd=new Date(yr,mo,1).getDay();
+  const MO=['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+  let cells='';
+  for(let i=0;i<fd;i++) cells+='<div></div>';
+  for(let d=1;d<=dim;d++){
+    const ds=`${yr}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const has=deadlineLogs.some(w=>w.deadline===ds);
+    const sel=ds===S.selDate;
+    cells+=`<div onclick="window._selDate('${ds}')" style="text-align:center;padding:4px 2px;border-radius:6px;cursor:pointer;font-size:12px;background:${sel?S.color:'transparent'};color:${sel?'#fff':'#334155'};">
+      ${d}${has?`<div style="width:5px;height:5px;border-radius:50%;background:${sel?'#fff':S.color};margin:1px auto 0;"></div>`:''}
+    </div>`;
+  }
+  const thisMonthDL = deadlineLogs.filter(w=>w.deadline&&w.deadline.startsWith(`${yr}-${String(mo+1).padStart(2,'0')}`)).sort((a,b)=>a.deadline.localeCompare(b.deadline));
+  return `<div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:16px;margin-bottom:20px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <button onclick="window._prevMyCal()" style="border:none;background:none;cursor:pointer;font-size:18px;color:#64748b;">‹</button>
+      <span style="font-weight:700;font-size:14px;color:#0f172a;">${yr}년 ${MO[mo]}</span>
+      <button onclick="window._nextMyCal()" style="border:none;background:none;cursor:pointer;font-size:18px;color:#64748b;">›</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center;margin-bottom:4px;">
+      ${['일','월','화','수','목','금','토'].map(d=>`<div style="font-size:11px;color:#94a3b8;font-weight:600;">${d}</div>`).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;">${cells}</div>
+    ${thisMonthDL.length?`<div style="margin-top:12px;padding-top:12px;border-top:1px solid #f1f5f9;">
+      <p style="font-size:11px;font-weight:700;color:#475569;margin:0 0 6px;">📌 이번달 기한 업무</p>
+      ${thisMonthDL.map(w=>`<div style="display:flex;gap:8px;font-size:11px;color:#64748b;margin-bottom:2px;"><span style="color:#94a3b8;">${w.deadline}</span><span>${w.tasks[0]||''}</span></div>`).join('')}
+    </div>`:''}
+  </div>`;
+}
+
+function formBlock(cat1) {
+  const f = S.form[cat1];
+  const editing = S.editId && S.logs.find(l=>l.id===S.editId)?.cat1===cat1;
+  return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin-bottom:12px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+      <span style="font-size:18px;">${CAT_ICONS[cat1]}</span>
+      <span style="font-weight:700;font-size:14px;color:#1e293b;">${cat1}</span>
+    </div>
+    <div style="margin-bottom:8px;">
+      <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px;">2차 카테고리 (선택)</label>
+      <select onchange="window._fCat2('${cat1}',this.value)" style="width:100%;padding:6px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;color:#334155;">
+        <option value="">없음</option>
+        ${S.cat2.map(c=>`<option value="${c.name}" ${f.cat2===c.name?'selected':''}>${c.name}</option>`).join('')}
+      </select>
+    </div>
+    <div style="margin-bottom:8px;">
+      <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px;">업무 내용</label>
+      ${f.tasks.map((t,i)=>`<div style="display:flex;gap:4px;margin-bottom:4px;align-items:center;">
+        <span style="font-size:11px;color:#cbd5e1;width:16px;">${i+1}.</span>
+        <input value="${t.replace(/"/g,'&quot;')}" oninput="window._fTask('${cat1}',${i},this.value)" placeholder="업무 내용 입력"
+          style="flex:1;padding:6px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;"/>
+        ${f.tasks.length>1?`<button onclick="window._fRemove('${cat1}',${i})" style="border:none;background:none;cursor:pointer;color:#cbd5e1;font-size:14px;">✕</button>`:''}
+      </div>`).join('')}
+      <button onclick="window._fAdd('${cat1}')" style="font-size:11px;color:${S.color};background:none;border:none;cursor:pointer;margin-top:2px;">+ 업무 추가</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+      <div>
+        <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px;">기한 (선택)</label>
+        <input type="date" value="${f.deadline}" onchange="window._fDeadline('${cat1}',this.value)"
+          style="width:100%;padding:6px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;box-sizing:border-box;"/>
+      </div>
+      <div>
+        <label style="font-size:11px;color:#94a3b8;display:block;margin-bottom:4px;">메모 (선택)</label>
+        <input value="${(f.memo||'').replace(/"/g,'&quot;')}" oninput="window._fMemo('${cat1}',this.value)" placeholder="메모"
+          style="width:100%;padding:6px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;box-sizing:border-box;"/>
+      </div>
+    </div>
+    <button onclick="window._save('${cat1}')" style="width:100%;padding:8px;background:${S.color};color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+      ${editing?'수정 완료':'저장'}
+    </button>
+    ${editing?`<button onclick="window._cancelEdit()" style="width:100%;padding:8px;background:#f1f5f9;color:#64748b;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;margin-top:4px;">취소</button>`:''}
+  </div>`;
+}
+
+function renderMy() {
+  const today = new Date().toISOString().split('T')[0];
+  const {s,e} = weekRange(0);
+  const myLogs = S.logs.filter(l=>l.userId===S.user);
+  const myDL = myLogs.filter(l=>l.deadline);
+  const todayLogs = myLogs.filter(l=>l.date===today);
+  const weekLogs = myLogs.filter(l=>{ const d=new Date(l.date); return d>=s&&d<=e; });
+  const uname = userName();
+  return `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+      <div>
+        ${miniCal(S.myCalMonth, myDL)}
+        <div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:20px;">
+          <h2 style="font-size:16px;font-weight:800;color:#0f172a;margin:0 0 4px;">${S.editId?'업무 수정':'업무 기록'}</h2>
+          <p style="font-size:12px;color:#94a3b8;margin:0 0 16px;">${uname}님, 진행하신 업무를 기록하세요.</p>
+          ${CAT1.map(c=>formBlock(c)).join('')}
+        </div>
+      </div>
+      <div>
+        <div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:20px;margin-bottom:16px;">
+          <h3 style="font-size:14px;font-weight:700;color:#0f172a;margin:0 0 12px;">📅 오늘 내 업무 (${todayLogs.length}건)</h3>
+          ${todayLogs.length===0?'<p style="font-size:12px;color:#94a3b8;">오늘 기록된 업무가 없습니다.</p>':todayLogs.map(l=>logCard(l,true)).join('')}
+        </div>
+        <div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:20px;">
+          <h3 style="font-size:14px;font-weight:700;color:#0f172a;margin:0 0 12px;">📆 이번주 내 업무 (${weekLogs.length}건)</h3>
+          ${weekLogs.length===0?'<p style="font-size:12px;color:#94a3b8;">이번주 기록된 업무가 없습니다.</p>':weekLogs.map(l=>logCard(l,true)).join('')}
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderCalendar() {
+  const yr=S.calMonth.getFullYear(), mo=S.calMonth.getMonth();
+  const dim=new Date(yr,mo+1,0).getDate(), fd=new Date(yr,mo,1).getDay();
+  const MO=['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+  let cells='';
+  for(let i=0;i<fd;i++) cells+=`<div style="height:80px;"></div>`;
+  for(let d=1;d<=dim;d++){
+    const ds=`${yr}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const dlLogs=S.logs.filter(l=>l.deadline===ds);
+    const sel=ds===S.selDate;
+    const uids=[...new Set(dlLogs.map(l=>l.userId))];
+    cells+=`<div onclick="window._selDate('${ds}')" style="height:80px;border:1px solid ${sel?S.color:'#e2e8f0'};border-radius:6px;padding:4px;cursor:pointer;background:${sel?S.color:'#fff'};overflow:hidden;">
+      <div style="font-size:12px;font-weight:600;color:${sel?'#fff':'#334155'};">${d}</div>
+      ${dlLogs.length?`<div style="display:flex;gap:2px;flex-wrap:wrap;margin-top:2px;">${uids.map(uid=>`<span style="width:7px;height:7px;border-radius:50%;background:${USER_COLORS[uid]||'#999'};display:inline-block;"></span>`).join('')}</div>
+      <div style="font-size:10px;color:${sel?'#fff':'#64748b'};margin-top:2px;">${dlLogs.length}건</div>`:''}
+    </div>`;
+  }
+  const selLogs=S.logs.filter(l=>l.deadline===S.selDate);
+  return `<div style="display:grid;grid-template-columns:2fr 1fr;gap:20px;">
+    <div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:20px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div style="display:flex;gap:8px;">
+          <select onchange="window._calYr(this.value)" style="padding:6px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;">
+            ${[2024,2025,2026].map(y=>`<option ${yr===y?'selected':''} value="${y}">${y}년</option>`).join('')}
+          </select>
+          <select onchange="window._calMo(this.value)" style="padding:6px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;">
+            ${MO.map((m,i)=>`<option ${mo===i?'selected':''} value="${i}">${m}</option>`).join('')}
+          </select>
+        </div>
+        <div style="display:flex;gap:4px;">
+          <button onclick="window._prevCal()" style="padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;">‹</button>
+          <button onclick="window._nextCal()" style="padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;">›</button>
+        </div>
+      </div>
+      <p style="font-size:11px;color:#94a3b8;margin:0 0 10px;">📌 기한이 설정된 업무 기준으로 표시됩니다.</p>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px;">
+        ${['일','월','화','수','목','금','토'].map(d=>`<div style="text-align:center;font-size:12px;font-weight:600;color:#64748b;padding:4px;">${d}</div>`).join('')}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;">${cells}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:20px;height:fit-content;">
+      <h3 style="font-size:14px;font-weight:700;color:#0f172a;margin:0 0 12px;">${new Date(S.selDate+'T12:00:00').toLocaleDateString('ko-KR',{month:'long',day:'numeric',weekday:'short'})} 기한 업무</h3>
+      ${selLogs.length===0?'<p style="font-size:12px;color:#94a3b8;">기한 업무 없음</p>':selLogs.map(l=>`
+        <div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-bottom:8px;">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;">
+            <span style="width:8px;height:8px;border-radius:50%;background:${USER_COLORS[l.userId]};display:inline-block;"></span>
+            <span style="font-size:12px;font-weight:600;color:#1e293b;">${l.userName}</span>
+            ${badge(l.cat1||'기타',l.cat2||'')}
+          </div>
+          <ul style="margin:0;padding-left:14px;">${l.tasks.map(t=>`<li style="font-size:11px;color:#475569;">${t}</li>`).join('')}</ul>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function renderReport() {
+  const {s,e} = weekRange(S.weekOffset);
+  const wLogs = S.logs.filter(l=>{ const d=new Date(l.date); return d>=s&&d<=e; });
+  const catTasks={};
+  CAT1.forEach(c=>{ catTasks[c]=wLogs.filter(l=>l.cat1===c).flatMap(l=>l.tasks); });
+  const kwMap={};
+  wLogs.forEach(l=>l.tasks.forEach(t=>t.split(/[\s,()]+/).filter(w=>w.length>1).forEach(w=>{kwMap[w]=(kwMap[w]||0)+1;})));
+  const topKw=Object.entries(kwMap).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const startOfYear=new Date(s.getFullYear(),0,1);
+  const wNum=Math.ceil((Math.abs(s-startOfYear)/86400000)/7);
+  return `<div style="display:flex;flex-direction:column;gap:16px;">
+    <div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:20px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <div>
+          <h2 style="font-size:18px;font-weight:800;color:#0f172a;margin:0 0 4px;">주간 업무보고서</h2>
+          <p style="font-size:12px;color:#94a3b8;margin:0;">${s.toLocaleDateString('ko-KR')} ~ ${e.toLocaleDateString('ko-KR')} · ${s.getMonth()+1}월 ${Math.ceil(s.getDate()/7)}주차 · W${String(wNum).padStart(2,'0')}</p>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button onclick="window._repPrev()" style="padding:6px 12px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;font-size:12px;">‹ 이전주</button>
+          <button onclick="window._repNow()" style="padding:6px 12px;border:none;border-radius:6px;background:${S.color};color:#fff;cursor:pointer;font-size:12px;font-weight:600;">이번주</button>
+          <button onclick="window._repNext()" style="padding:6px 12px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;font-size:12px;">다음주 ›</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:20px;">
+      <h3 style="font-size:15px;font-weight:700;color:#0f172a;margin:0 0 12px;">📢 주요 공지사항</h3>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <input id="noticeIn" value="${S.newNotice.replace(/"/g,'&quot;')}" oninput="window._noticeInput(this.value)" placeholder="공지사항 입력"
+          style="flex:1;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;"/>
+        <button onclick="window._addNotice()" style="padding:8px 14px;background:${S.color};color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">등록</button>
+      </div>
+      ${S.notices.length===0?'<p style="font-size:12px;color:#94a3b8;">등록된 공지사항이 없습니다.</p>':
+        S.notices.map(n=>`<div style="display:flex;justify-content:space-between;align-items:flex-start;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:6px;background:#f8fafc;">
+          <div><p style="font-size:13px;color:#1e293b;margin:0 0 2px;">${n.text}</p><p style="font-size:11px;color:#94a3b8;margin:0;">${n.author} · ${n.date}</p></div>
+          <button onclick="window._delNotice('${n.id}')" style="border:none;background:none;cursor:pointer;color:#cbd5e1;font-size:14px;">✕</button>
+        </div>`).join('')}
+    </div>
+
+    <div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:20px;">
+      <h3 style="font-size:15px;font-weight:700;color:#0f172a;margin:0 0 16px;">1. 이번주 주요 진행 업무</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        ${CAT1.map((c,i)=>`<div style="border-left:4px solid ${S.color};padding-left:12px;">
+          <h4 style="font-size:13px;font-weight:700;color:#1e293b;margin:0 0 8px;">1.${i+1} ${CAT_ICONS[c]} ${c}</h4>
+          ${catTasks[c].length?`<ul style="margin:0;padding-left:14px;">${catTasks[c].slice(0,5).map(t=>`<li style="font-size:12px;color:#475569;margin-bottom:2px;">${t}</li>`).join('')}${catTasks[c].length>5?`<li style="font-size:11px;color:#94a3b8;">+ ${catTasks[c].length-5}개</li>`:''}</ul>
+          <button onclick="navigator.clipboard.writeText('${catTasks[c].join('\\n').replace(/'/g,"\\'")}').then(()=>alert('복사됐습니다!'))" style="font-size:11px;color:${S.color};background:none;border:none;cursor:pointer;margin-top:6px;">⎘ 복사</button>`
+          :'<p style="font-size:12px;color:#94a3b8;">기록된 업무 없음</p>'}
+        </div>`).join('')}
+      </div>
+    </div>
+
+    <div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:20px;">
+      <h3 style="font-size:15px;font-weight:700;color:#0f172a;margin:0 0 16px;">팀원별 주간 업무</h3>
+      ${MEMBERS.map(m=>{
+        const ml=wLogs.filter(l=>l.userId===m.id);
+        return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:8px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="width:10px;height:10px;border-radius:50%;background:${USER_COLORS[m.id]};display:inline-block;"></span>
+            <span style="font-size:13px;font-weight:700;color:#1e293b;">${m.name}</span>
+            <span style="font-size:11px;color:#94a3b8;">(${ml.length}건)</span>
+          </div>
+          ${ml.length===0?'<p style="font-size:12px;color:#94a3b8;margin:0;">기록 없음</p>':
+            `<ul style="margin:0;padding-left:14px;">${ml.flatMap(l=>l.tasks).map(t=>`<li style="font-size:12px;color:#475569;margin-bottom:1px;">${t}</li>`).join('')}</ul>`}
+        </div>`;}).join('')}
+    </div>
+
+    ${topKw.length?`<div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:20px;">
+      <h3 style="font-size:15px;font-weight:700;color:#0f172a;margin:0 0 16px;">주요 키워드</h3>
+      ${topKw.map(([kw,cnt],i)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <div style="width:20px;height:20px;border-radius:50%;background:${S.color};color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;">${i+1}</div>
+        <span style="flex:1;font-size:13px;color:#1e293b;">${kw}</span>
+        <span style="font-size:11px;color:#94a3b8;">${cnt}회</span>
+        <div style="width:60px;height:4px;background:#f1f5f9;border-radius:2px;overflow:hidden;"><div style="height:100%;background:${S.color};width:${(cnt/topKw[0][1])*100}%;"></div></div>
+      </div>`).join('')}
+    </div>`:''}
+  </div>`;
+}
+
+function renderFuture() {
+  const withDL=S.logs.filter(l=>l.deadline).sort((a,b)=>a.deadline.localeCompare(b.deadline));
+  const withoutDL=S.logs.filter(l=>!l.deadline);
+  return `<div style="display:flex;flex-direction:column;gap:16px;">
+    <div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:20px;">
+      <h2 style="font-size:20px;font-weight:800;color:#0f172a;margin:0;">🎯 향후 일정</h2>
+    </div>
+    <div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:20px;">
+      <h3 style="font-size:15px;font-weight:700;color:#0f172a;margin:0 0 16px;">⏰ 기한이 있는 업무 (${withDL.length}건)</h3>
+      ${withDL.length===0?'<p style="font-size:12px;color:#94a3b8;">없습니다.</p>':withDL.map(l=>{
+        const dl=daysLeft(l.deadline), urgent=dl<=3&&dl>=0;
+        return `<div style="border:1px solid ${urgent?'#fca5a5':'#e2e8f0'};border-radius:10px;padding:14px;margin-bottom:10px;background:${urgent?'#fff1f2':'#fff'};">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+            <span style="width:8px;height:8px;border-radius:50%;background:${USER_COLORS[l.userId]};display:inline-block;"></span>
+            ${badge(l.cat1||'기타',l.cat2||'')}
+            <span style="font-size:13px;font-weight:600;color:#1e293b;">${l.userName}</span>
+            <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;background:${urgent?'#fee2e2':'#dbeafe'};color:${urgent?'#b91c1c':'#1d4ed8'};">
+              📅 ${l.deadline} ${dl<0?'(기한 지남)':dl===0?'(오늘)':`(${dl}일 남음)`}
+            </span>
+          </div>
+          <ul style="margin:0;padding-left:14px;">${l.tasks.map(t=>`<li style="font-size:12px;color:#475569;">${t}</li>`).join('')}</ul>
+        </div>`;}).join('')}
+    </div>
+    <div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:20px;">
+      <h3 style="font-size:15px;font-weight:700;color:#0f172a;margin:0 0 16px;">📋 기한 없는 업무 (${withoutDL.length}건)</h3>
+      ${withoutDL.length===0?'<p style="font-size:12px;color:#94a3b8;">없습니다.</p>':withoutDL.map(l=>`
+        <div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px;margin-bottom:8px;">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+            <span style="width:8px;height:8px;border-radius:50%;background:${USER_COLORS[l.userId]};display:inline-block;"></span>
+            ${badge(l.cat1||'기타',l.cat2||'')}
+            <span style="font-size:13px;font-weight:600;color:#1e293b;">${l.userName}</span>
+            <span style="font-size:12px;color:#94a3b8;">${l.date}</span>
+          </div>
+          <ul style="margin:0;padding-left:14px;">${l.tasks.map(t=>`<li style="font-size:12px;color:#475569;">${t}</li>`).join('')}</ul>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function renderSettings() {
+  return `<div style="max-width:500px;">
+    <div style="background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);padding:24px;">
+      <h2 style="font-size:18px;font-weight:800;color:#0f172a;margin:0 0 4px;">⚙️ 설정</h2>
+      <p style="font-size:12px;color:#94a3b8;margin:0 0 24px;">2차 카테고리 및 앱 설정을 관리합니다.</p>
+
+      <h3 style="font-size:14px;font-weight:700;color:#1e293b;margin:0 0 10px;">2차 카테고리 관리</h3>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <input id="cat2In" value="${S.newCat2.replace(/"/g,'&quot;')}" oninput="window._cat2Input(this.value)" placeholder="새 2차 카테고리 입력"
+          style="flex:1;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;"/>
+        <button onclick="window._addCat2()" style="padding:8px 14px;background:${S.color};color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">추가</button>
+      </div>
+      ${S.cat2.length===0?'<p style="font-size:12px;color:#94a3b8;">등록된 2차 카테고리가 없습니다.</p>':
+        S.cat2.map(c=>`<div style="display:flex;align-items:center;gap:8px;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:6px;">
+          ${S.editCat2===c.id?`
+            <input value="${S.editCat2Val.replace(/"/g,'&quot;')}" oninput="window._cat2EditVal(this.value)" style="flex:1;padding:6px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;"/>
+            <button onclick="window._saveCat2Edit()" style="padding:4px 10px;background:${S.color};color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;">저장</button>
+            <button onclick="window._cancelCat2()" style="padding:4px 10px;background:#f1f5f9;color:#64748b;border:none;border-radius:6px;font-size:12px;cursor:pointer;">취소</button>
+          `:`
+            <span style="flex:1;font-size:14px;color:#1e293b;">${c.name}</span>
+            <button onclick="window._editCat2('${c.id}','${c.name}')" style="border:none;background:none;cursor:pointer;color:#94a3b8;font-size:14px;">✎</button>
+            <button onclick="window._delCat2('${c.id}')" style="border:none;background:none;cursor:pointer;color:#94a3b8;font-size:14px;">✕</button>
+          `}
+        </div>`).join('')}
+
+      <hr style="border:none;border-top:1px solid #f1f5f9;margin:20px 0;"/>
+
+      <h3 style="font-size:14px;font-weight:700;color:#1e293b;margin:0 0 10px;">담당자 색상</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+        ${MEMBERS.map(m=>`<div style="display:flex;align-items:center;gap:8px;">
+          <span style="width:10px;height:10px;border-radius:50%;background:${USER_COLORS[m.id]};display:inline-block;"></span>
+          <span style="font-size:13px;color:#334155;">${m.name}</span>
+        </div>`).join('')}
+      </div>
+
+      <hr style="border:none;border-top:1px solid #f1f5f9;margin:20px 0;"/>
+
+      <h3 style="font-size:14px;font-weight:700;color:#1e293b;margin:0 0 10px;">1차 카테고리</h3>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        ${CAT1.map(c=>`<div style="display:flex;align-items:center;gap:8px;"><span>${CAT_ICONS[c]}</span><span style="font-size:13px;color:#334155;">${c}</span></div>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+// Global bindings
+window._login = id => { S.user=id; S.color=USER_COLORS[id]; render(); };
+window._logout = () => { S.user=null; S.color=null; render(); };
+window._view = v => { S.view=v; render(); };
+window._selDate = d => { S.selDate=d; render(); };
+window._prevMyCal = () => { S.myCalMonth=new Date(S.myCalMonth.getFullYear(),S.myCalMonth.getMonth()-1); render(); };
+window._nextMyCal = () => { S.myCalMonth=new Date(S.myCalMonth.getFullYear(),S.myCalMonth.getMonth()+1); render(); };
+window._prevCal = () => { S.calMonth=new Date(S.calMonth.getFullYear(),S.calMonth.getMonth()-1); render(); };
+window._nextCal = () => { S.calMonth=new Date(S.calMonth.getFullYear(),S.calMonth.getMonth()+1); render(); };
+window._calYr = y => { S.calMonth=new Date(parseInt(y),S.calMonth.getMonth()); render(); };
+window._calMo = m => { S.calMonth=new Date(S.calMonth.getFullYear(),parseInt(m)); render(); };
+window._fTask = (c,i,v) => { S.form[c].tasks[i]=v; };
+window._fAdd = c => { S.form[c].tasks.push(''); render(); };
+window._fRemove = (c,i) => { S.form[c].tasks.splice(i,1); render(); };
+window._fCat2 = (c,v) => { S.form[c].cat2=v; };
+window._fDeadline = (c,v) => { S.form[c].deadline=v; };
+window._fMemo = (c,v) => { S.form[c].memo=v; };
+window._save = c => saveLog(c);
+window._cancelEdit = () => { S.editId=null; CAT1.forEach(c=>{S.form[c]={tasks:[''],cat2:'',deadline:'',memo:''}}); render(); };
+window._done = id => toggleDone(id);
+window._edit = id => startEdit(id);
+window._copy = id => copyLog(id);
+window._del = id => { S.delId=id; render(); };
+window._doDelete = () => doDelete();
+window._cancelDel = () => { S.delId=null; render(); };
+window._addCat2 = () => addCat2();
+window._delCat2 = id => delCat2(id);
+window._editCat2 = (id,val) => { S.editCat2=id; S.editCat2Val=val; render(); };
+window._saveCat2Edit = () => saveCat2Edit();
+window._cancelCat2 = () => { S.editCat2=null; S.editCat2Val=''; render(); };
+window._cat2Input = v => { S.newCat2=v; };
+window._cat2EditVal = v => { S.editCat2Val=v; };
+window._addNotice = () => addNotice();
+window._delNotice = id => delNotice(id);
+window._noticeInput = v => { S.newNotice=v; };
+window._repPrev = () => { S.weekOffset--; render(); };
+window._repNext = () => { S.weekOffset++; render(); };
+window._repNow = () => { S.weekOffset=0; render(); };
+
+render();
+</script>
+</body>
 </html>
