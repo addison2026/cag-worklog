@@ -50,7 +50,7 @@ onSnapshot(query(collection(db,'worklogs'),orderBy('createdAt','desc')),s=>{
 onSnapshot(doc(db,'settings','cat2'),s=>{S.cat2=s.exists()?(s.data().list||[]):[];draw();});
 onSnapshot(doc(db,'settings','notices'),s=>{S.notices=s.exists()?(s.data().list||[]):[];draw();});
 
-function td(){return new Date().toISOString().split('T')[0];}
+function td(){const d=new Date();return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());}
 function nows(){const d=new Date();return td()+' '+pad(d.getHours())+':'+pad(d.getMinutes());}
 function pad(n){return String(n).padStart(2,'0');}
 function uname(id){return MB.find(m=>m.id===(id||S.user))?.name||'';}
