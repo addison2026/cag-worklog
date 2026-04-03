@@ -330,9 +330,7 @@ function calHTML(){
     (ml.length?'<span style="font-size:10px;color:#94a3b8;">'+lc(ml)+'건</span>':'')+
     (dlM.length?'<span style="font-size:10px;background:#fee2e2;color:#b91c1c;padding:1px 5px;border-radius:8px;">마감</span>':'')+
     '</div>'+
-    (ml.length?ml.map(l=>logCard(l,l.userId===S.user)).join(''):
-    (dlM.length?dlM.map(l=>logCard(l,l.userId===S.user)).join(''):
-    '<p style="font-size:11px;color:#94a3b8;margin:0;">업무 없음</p>'))+
+    (ml.length?ml.map(l=>logCard(l,l.userId===S.user)).join(''):'<p style="font-size:11px;color:#94a3b8;margin:0;">업무 없음</p>')+
     '</div>';
   }).join('')+
   '</div></div>'+
