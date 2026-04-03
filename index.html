@@ -63,10 +63,9 @@ function wEnd(m){const e=new Date(m);e.setDate(m.getDate()+6);e.setHours(23,59,5
 function dLeft(dl){return Math.ceil((new Date(dl)-new Date())/86400000);}
 function hasFKW(log){return FK.some(k=>[...(log.tasks||[]),log.note||''].join(' ').includes(k));}
 
-// 날짜 문자열 비교로 주간 필터 (Date 객체 변환 오류 방지)
-function inWeek(dateStr, mon, sun){
-  return dateStr >= mon.toISOString().split('T')[0] && dateStr <= sun.toISOString().split('T')[0];
-}
+// 로컬 날짜 문자열 비교로 주간 필터
+function dateStr(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());}
+function inWeek(ds, mon, sun){return ds >= dateStr(mon) && ds <= dateStr(sun);}
 
 function badge(c1,c2){
   const ic=CI[c1]||'📌',cc=CC[c1]||'#64748b';
@@ -392,13 +391,29 @@ function repHTML(){
   const cat2Stats=Object.entries(cat2Map).sort((a,b)=>b[1]-a[1]);
 
   return '<div style="display:flex;flex-direction:column;gap:16px;">'+
-  // 헤더
+  // 이번주/차주 섹션용 간소화 카드 (작성자 컬러 + 업무내용만, 모든 인원 수정/삭제 가능)
+  function repTaskRow(l){
+    const isMine=true; // 주간보고서에서는 모든 인원이 수정/삭제 가능
+    return '<div style="display:flex;align-items:flex-start;gap:6px;padding:5px 0;border-bottom:1px solid #f8fafc;">'+
+    '<span style="width:7px;height:7px;border-radius:50%;background:'+UC[l.userId]+';display:inline-block;flex-shrink:0;margin-top:4px;"></span>'+
+    '<div style="flex:1;font-size:12px;color:#334155;line-height:1.5;">'+l.tasks.join(' / ')+'</div>'+
+    '<div style="display:flex;gap:1px;flex-shrink:0;">'+
+    '<button class="ib" onclick="W.edit(\''+l.id+'\')" title="수정">✎</button>'+
+    '<button class="ib" onclick="W.copy(\''+l.id+'\')" title="복사">⎘</button>'+
+    '<button class="ib" onclick="W.del(\''+l.id+'\')" style="color:#fca5a5;" title="삭제">✕</button>'+
+    '</div></div>';
+  }
+
+  // 헤더 + 담당자 범례
   '<div style="background:#fff;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.07);padding:20px;">'+
-  '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">'+
+  '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px;">'+
   '<div><h2 style="font-size:18px;font-weight:800;color:#0f172a;margin:0 0 4px;">📊 주간 업무보고서</h2>'+
   '<p style="font-size:12px;color:#94a3b8;margin:0;">'+mon.toLocaleDateString('ko-KR')+' ~ '+sun.toLocaleDateString('ko-KR')+' · '+(mon.getMonth()+1)+'월 '+Math.ceil(mon.getDate()/7)+'주차 · W'+pad(wn)+'</p></div>'+
   '<select onchange="W.repWeek(this.value)" style="padding:8px 14px;border:2px solid '+S.color+';border-radius:8px;font-size:13px;font-weight:600;color:'+S.color+';background:#fff;cursor:pointer;">'+
-  wopts.map(o=>'<option value="'+o.off+'" '+(S.repWeek===o.off?'selected':'')+'>'+o.label+'</option>').join('')+'</select></div></div>'+
+  wopts.map(o=>'<option value="'+o.off+'" '+(S.repWeek===o.off?'selected':'')+'>'+o.label+'</option>').join('')+'</select></div>'+
+  '<div style="display:flex;flex-wrap:wrap;gap:10px;padding-top:12px;border-top:1px solid #f1f5f9;">'+
+  MB.map(m=>'<div style="display:flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:50%;background:'+UC[m.id]+';display:inline-block;"></span><span style="font-size:12px;color:#475569;font-weight:600;">'+m.name+'</span></div>').join('')+
+  '</div></div>'+
 
   // 공지
   '<div style="background:#fff;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.07);padding:20px;">'+
@@ -411,28 +426,43 @@ function repHTML(){
   '<button onclick="W.delNotice(\''+n.id+'\')" style="border:none;background:none;cursor:pointer;color:#cbd5e1;font-size:15px;margin-left:8px;">✕</button></div>').join(''):'<p style="font-size:12px;color:#94a3b8;">등록된 공지사항이 없습니다.</p>')+
   '</div>'+
 
-  // 이번주 진행 업무 (모든 로그 전부)
+  // 이번주 진행 업무 — 작성자 컬러 + 업무내용만, 카테고리 통합복사 포함
   '<div style="background:#fff;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.07);padding:20px;">'+
   '<h3 style="font-size:15px;font-weight:800;color:#0f172a;margin:0 0 14px;">1. 이번주 주요 진행 업무 <span style="font-size:12px;color:#94a3b8;font-weight:400;">총 '+total+'건</span></h3>'+
   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;">'+
-  C1.map(c=>'<div style="border-left:3px solid '+CC[c]+';padding-left:12px;">'+
-  '<h4 style="font-size:13px;font-weight:800;color:'+CC[c]+';margin:0 0 8px;">'+CI[c]+' '+c+' <span style="font-size:11px;color:#94a3b8;font-weight:500;">'+ct[c].length+'건</span></h4>'+
-  (ct[c].length?ct[c].map(l=>logCard(l,l.userId===S.user)).join(''):'<p style="font-size:12px;color:#94a3b8;">기록 없음</p>')+
-  '</div>').join('')+'</div></div>'+
+  C1.map(c=>{
+    const logs=ct[c];
+    const copyText=logs.map(l=>l.tasks.join('\n')).join('\n');
+    return '<div style="border-left:3px solid '+CC[c]+';padding-left:12px;">'+
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'+
+    '<h4 style="font-size:13px;font-weight:800;color:'+CC[c]+';margin:0;">'+CI[c]+' '+c+' <span style="font-size:11px;color:#94a3b8;font-weight:500;">'+logs.length+'건</span></h4>'+
+    (logs.length?'<button onclick="navigator.clipboard.writeText(\''+copyText.replace(/'/g,"\\'").replace(/\n/g,'\\n')+'\').then(()=>alert(\'복사됐습니다!\'))" style="font-size:11px;color:'+CC[c]+';background:none;border:none;cursor:pointer;padding:0 2px;" title="전체복사">⎘전체</button>':'')+
+    '</div>'+
+    (logs.length?logs.map(l=>repTaskRow(l)).join(''):'<p style="font-size:12px;color:#94a3b8;">기록 없음</p>')+
+    '</div>';
+  }).join('')+'</div></div>'+
 
-  // 차주 예정
+  // 차주 예정 — 동일하게 간소화
   '<div style="background:#fff;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.07);padding:20px;">'+
   '<h3 style="font-size:15px;font-weight:800;color:#0f172a;margin:0 0 4px;">2. 차주 진행 예정 업무</h3>'+
   '<p style="font-size:11px;color:#94a3b8;margin:0 0 14px;">메모에 <b>차주</b> 키워드가 포함된 업무만 표시</p>'+
   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;">'+
-  C1.map(c=>'<div style="border-left:3px solid '+CC[c]+'55;padding-left:12px;">'+
-  '<h4 style="font-size:13px;font-weight:800;color:'+CC[c]+';margin:0 0 8px;opacity:.8;">'+CI[c]+' '+c+' <span style="font-size:11px;color:#94a3b8;font-weight:500;">'+nextCt[c].length+'건</span></h4>'+
-  (nextCt[c].length?nextCt[c].map(l=>logCard(l,l.userId===S.user)).join(''):'<p style="font-size:12px;color:#94a3b8;">해당 없음</p>')+
-  '</div>').join('')+'</div></div>'+
+  C1.map(c=>{
+    const logs=nextCt[c];
+    const copyText=logs.map(l=>l.tasks.join('\n')).join('\n');
+    return '<div style="border-left:3px solid '+CC[c]+'55;padding-left:12px;">'+
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'+
+    '<h4 style="font-size:13px;font-weight:800;color:'+CC[c]+';margin:0;opacity:.8;">'+CI[c]+' '+c+' <span style="font-size:11px;color:#94a3b8;font-weight:500;">'+logs.length+'건</span></h4>'+
+    (logs.length?'<button onclick="navigator.clipboard.writeText(\''+copyText.replace(/'/g,"\\'").replace(/\n/g,'\\n')+'\').then(()=>alert(\'복사됐습니다!\'))" style="font-size:11px;color:'+CC[c]+';background:none;border:none;cursor:pointer;padding:0 2px;" title="전체복사">⎘전체</button>':'')+
+    '</div>'+
+    (logs.length?logs.map(l=>repTaskRow(l)).join(''):'<p style="font-size:12px;color:#94a3b8;">해당 없음</p>')+
+    '</div>';
+  }).join('')+'</div></div>'+
 
-  // 카테고리 비중
+  // 카테고리 비중 — inWeek로 필터된 wL 기준 정확한 카운트
   '<div style="background:#fff;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.07);padding:20px;">'+
-  '<h3 style="font-size:15px;font-weight:800;color:#0f172a;margin:0 0 16px;">📈 카테고리별 업무 비중 <span style="font-size:12px;color:#94a3b8;font-weight:400;">로그 건수 기준</span></h3>'+
+  '<h3 style="font-size:15px;font-weight:800;color:#0f172a;margin:0 0 4px;">📈 카테고리별 업무 비중</h3>'+
+  '<p style="font-size:11px;color:#94a3b8;margin:0 0 16px;">해당 주간 기록된 전체 로그 '+total+'건 기준</p>'+
   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">'+
   '<div><p style="font-size:12px;font-weight:700;color:#475569;margin:0 0 10px;">1차 카테고리</p>'+
   (total===0?'<p style="font-size:12px;color:#94a3b8;">데이터 없음</p>':
@@ -453,7 +483,7 @@ function repHTML(){
   '<div style="height:100%;background:'+S.color+';border-radius:5px;width:'+Math.round(cnt/mx*100)+'%;"></div></div></div>').join('');})())+
   '</div></div></div>'+
 
-  // 팀원별 (맨 하단)
+  // 팀원별 (맨 하단) — 복사/수정/삭제 포함
   '<div style="background:#fff;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,.07);padding:20px;">'+
   '<h3 style="font-size:15px;font-weight:800;color:#0f172a;margin:0 0 14px;">3. 팀원별 주간 업무</h3>'+
   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">'+
@@ -464,7 +494,7 @@ function repHTML(){
     '<span style="width:8px;height:8px;border-radius:50%;background:'+UC[m.id]+';display:inline-block;"></span>'+
     '<span style="font-size:13px;font-weight:800;color:#1e293b;">'+m.name+'</span>'+
     '<span style="font-size:10px;color:#94a3b8;">'+ml.length+'건</span></div>'+
-    (ml.length?ml.map(l=>logCard(l,l.userId===S.user)).join(''):'<p style="font-size:11px;color:#94a3b8;margin:0;">기록 없음</p>')+
+    (ml.length?ml.map(l=>logCard(l,true)).join(''):'<p style="font-size:11px;color:#94a3b8;margin:0;">기록 없음</p>')+
     '</div>';
   }).join('')+'</div></div></div>';
 }
